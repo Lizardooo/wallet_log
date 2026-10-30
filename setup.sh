@@ -21,16 +21,14 @@ if ! grep -q READ_SMS "$MANIFEST"; then
 fi
 
 # The SMS plugin configures Kotlin tasks after the root project is evaluated.
-# Apply the target after all projects are evaluated so the plugin's 1.8 default
-# cannot override the Java 11 target used by the generated app.
-cat >> android/build.gradle <<'EOF'
+# Apply the target to every subproject so the plugin's 1.8 default matches the
+# Java 11 target used by the generated app.
+cat >> android/build.gradle.kts <<'EOF'
 
-gradle.projectsEvaluated {
-    subprojects {
-        tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-            kotlinOptions {
-                jvmTarget = "11"
-            }
+subprojects {
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
         }
     }
 }
