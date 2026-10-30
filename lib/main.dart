@@ -1,5 +1,5 @@
-import 'package:another_telephony/telephony.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'db.dart';
 
@@ -32,50 +32,55 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  final Telephony _telephony = Telephony.instance;
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  static const _sms = MethodChannel('wallet_log/sms');
   List<Tx> _items = [];
   String? _filter;
   bool _denied = false;
-  bool _listening = false;
+  bool _scanning = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _scan();
   }
 
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_denied) _scan();
+  }
+
   Future<void> _scan() async {
-    final granted = await _telephony.requestSmsPermissions ?? false;
-    if (!granted) {
-      setState(() => _denied = true);
-      return;
-    }
-    setState(() => _denied = false);
+    if (_scanning) return;
+    _scanning = true;
+    try {
+      final granted = await _sms.invokeMethod<bool>('requestPermission') ?? false;
+      if (!granted) {
+        if (mounted) setState(() => _denied = true);
+        return;
+      }
+      if (mounted) setState(() => _denied = false);
 
-    final msgs = await _telephony.getInboxSms(
-      columns: [SmsColumn.ADDRESS, SmsColumn.BODY, SmsColumn.DATE],
-      sortOrder: [OrderBy(SmsColumn.DATE, sort: Sort.DESC)],
-    );
-    for (final m in msgs) {
-      await TxDb.addSms(m.address ?? '', m.body ?? '', m.date ?? 0);
+      final msgs = await _sms.invokeMethod<List<dynamic>>('readInbox') ?? [];
+      for (final raw in msgs) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        await TxDb.addSms(
+          (m['address'] ?? '') as String,
+          (m['body'] ?? '') as String,
+          (m['date'] ?? 0) as int,
+        );
+      }
+      await _load();
+    } finally {
+      _scanning = false;
     }
-
-    if (!_listening) {
-      _listening = true;
-      _telephony.listenIncomingSms(
-        onNewMessage: (SmsMessage m) async {
-          await TxDb.addSms(
-            m.address ?? '',
-            m.body ?? '',
-            m.date ?? DateTime.now().millisecondsSinceEpoch,
-          );
-          if (mounted) _load();
-        },
-        listenInBackground: false,
-      );
-    }
-    await _load();
   }
 
   Future<void> _load() async {

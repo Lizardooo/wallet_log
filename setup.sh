@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# One-time setup: generates the Android platform folder, adds SMS permissions,
-# and fetches packages. Requires the Flutter SDK (https://flutter.dev/install).
+# One-time setup: generates the Android platform folder, installs the native SMS
+# reader, adds the SMS permission, and fetches packages.
+# Requires the Flutter SDK (https://flutter.dev/install).
 set -euo pipefail
 
 cp pubspec.yaml .pubspec.bak
@@ -14,15 +15,17 @@ rm -rf lib test
 mv .lib.bak lib
 mv .test.bak test
 
+# Replace the generated MainActivity with our SMS-reading one.
+KT_DIR=android/app/src/main/kotlin/com/example/wallet_log
+find android/app/src/main -name 'MainActivity.*' -delete
+mkdir -p "$KT_DIR"
+cp native/MainActivity.kt "$KT_DIR/MainActivity.kt"
+
 MANIFEST=android/app/src/main/AndroidManifest.xml
 if ! grep -q READ_SMS "$MANIFEST"; then
   # GNU sed syntax; on macOS use: brew install gnu-sed, then gsed.
-  sed -i 's|<application|<uses-permission android:name="android.permission.READ_SMS"/>\n    <uses-permission android:name="android.permission.RECEIVE_SMS"/>\n    <application|' "$MANIFEST"
+  sed -i 's|<application|<uses-permission android:name="android.permission.READ_SMS"/>\n    <application|' "$MANIFEST"
 fi
-
-# The SMS plugin mixes Java 11 and Kotlin 1.8 targets; newer Gradle rejects that
-# by default, so downgrade the check to a warning.
-printf '\nkotlin.jvm.target.validation.mode=warning\n' >> android/gradle.properties
 
 flutter pub get
 echo "Done. Connect an Android phone and run: flutter run"
