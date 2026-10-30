@@ -2,12 +2,14 @@ package com.example.wallet_log
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.database.Cursor
 import android.net.Uri
+import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-/** Reads the SMS inbox for the Flutter side; replaces a third-party SMS plugin. */
+/** Native side for the Flutter app: SMS inbox access and the daily reminder. */
 class MainActivity : FlutterActivity() {
     private val channelName = "wallet_log/sms"
     private var pending: MethodChannel.Result? = null
@@ -17,23 +19,44 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "requestPermission" -> requestPerm(result)
+                    "requestPermission" ->
+                        requestPerm(Manifest.permission.READ_SMS, result)
+                    "requestNotifPermission" ->
+                        if (Build.VERSION.SDK_INT < 33) result.success(true)
+                        else requestPerm("android.permission.POST_NOTIFICATIONS", result)
                     "readInbox" -> readInbox(result)
+                    "scheduleDaily" -> {
+                        val h = call.argument<Int>("hour") ?: 9
+                        val m = call.argument<Int>("minute") ?: 0
+                        Reminder.schedule(applicationContext, h, m)
+                        result.success(true)
+                    }
+                    "cancelDaily" -> {
+                        Reminder.cancel(applicationContext)
+                        result.success(true)
+                    }
+                    "getReminder" -> {
+                        val s = Reminder.saved(applicationContext)
+                        result.success(
+                            if (s == null) null
+                            else mapOf("hour" to s.first, "minute" to s.second)
+                        )
+                    }
                     else -> result.notImplemented()
                 }
             }
     }
 
-    private fun hasPerm(): Boolean =
-        checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
+    private fun hasPerm(perm: String): Boolean =
+        checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
 
-    private fun requestPerm(result: MethodChannel.Result) {
-        if (hasPerm()) {
+    private fun requestPerm(perm: String, result: MethodChannel.Result) {
+        if (hasPerm(perm)) {
             result.success(true)
             return
         }
         pending = result
-        requestPermissions(arrayOf(Manifest.permission.READ_SMS), 77)
+        requestPermissions(arrayOf(perm), 77)
     }
 
     override fun onRequestPermissionsResult(
@@ -51,26 +74,41 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun readInbox(result: MethodChannel.Result) {
-        if (!hasPerm()) {
+        if (!hasPerm(Manifest.permission.READ_SMS)) {
             result.error("denied", "READ_SMS not granted", null)
             return
         }
         Thread {
             val out = ArrayList<Map<String, Any?>>()
             try {
-                contentResolver.query(
-                    Uri.parse("content://sms/inbox"),
-                    arrayOf("address", "body", "date"),
-                    null,
-                    null,
-                    "date DESC"
-                )?.use { c ->
-                    while (c.moveToNext()) {
+                val uri = Uri.parse("content://sms/inbox")
+                // sub_id (which SIM received the message) is missing on some devices.
+                var withSub = true
+                var c: Cursor? = try {
+                    contentResolver.query(
+                        uri, arrayOf("address", "body", "date", "sub_id"),
+                        null, null, "date DESC"
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+                if (c == null) {
+                    withSub = false
+                    c = contentResolver.query(
+                        uri, arrayOf("address", "body", "date"),
+                        null, null, "date DESC"
+                    )
+                }
+                c?.use { cur ->
+                    while (cur.moveToNext()) {
+                        val sub: Int? =
+                            if (withSub && !cur.isNull(3)) cur.getInt(3) else null
                         out.add(
                             mapOf(
-                                "address" to c.getString(0),
-                                "body" to c.getString(1),
-                                "date" to c.getLong(2)
+                                "address" to cur.getString(0),
+                                "body" to cur.getString(1),
+                                "date" to cur.getLong(2),
+                                "subId" to sub
                             )
                         )
                     }

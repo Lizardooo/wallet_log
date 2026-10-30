@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# One-time setup: generates the Android platform folder, installs the native SMS
-# reader, adds the SMS permission, and fetches packages.
-# Requires the Flutter SDK (https://flutter.dev/install).
+# One-time setup: generates the Android platform folder, installs the native
+# Kotlin code (SMS reader + daily reminder), adds permissions and receivers,
+# and fetches packages. Requires the Flutter SDK (https://flutter.dev/install).
 set -euo pipefail
 
 cp pubspec.yaml .pubspec.bak
@@ -15,16 +15,18 @@ rm -rf lib test
 mv .lib.bak lib
 mv .test.bak test
 
-# Replace the generated MainActivity with our SMS-reading one.
+# Replace the generated MainActivity with our native code.
 KT_DIR=android/app/src/main/kotlin/com/example/wallet_log
 find android/app/src/main -name 'MainActivity.*' -delete
 mkdir -p "$KT_DIR"
-cp native/MainActivity.kt "$KT_DIR/MainActivity.kt"
+cp native/*.kt "$KT_DIR/"
 
 MANIFEST=android/app/src/main/AndroidManifest.xml
-if ! grep -q READ_SMS "$MANIFEST"; then
-  # GNU sed syntax; on macOS use: brew install gnu-sed, then gsed.
-  sed -i 's|<application|<uses-permission android:name="android.permission.READ_SMS"/>\n    <application|' "$MANIFEST"
+if ! grep -q POST_NOTIFICATIONS "$MANIFEST"; then
+  awk '/<application/ { while ((getline l < "native/permissions.xml") > 0) print l } { print }' \
+    "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
+  awk '/<\/application>/ { while ((getline l < "native/receivers.xml") > 0) print l } { print }' \
+    "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
 fi
 
 flutter pub get
