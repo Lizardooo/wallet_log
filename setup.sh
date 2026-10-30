@@ -20,14 +20,17 @@ if ! grep -q READ_SMS "$MANIFEST"; then
   sed -i 's|<application|<uses-permission android:name="android.permission.READ_SMS"/>\n    <uses-permission android:name="android.permission.RECEIVE_SMS"/>\n    <application|' "$MANIFEST"
 fi
 
-# The SMS plugin mixes Java 11 and Kotlin 1.8 targets. Align all plugin Kotlin
-# compilation with the Java target so newer Gradle versions accept the build.
+# The SMS plugin configures Kotlin tasks after the root project is evaluated.
+# Apply the target after all projects are evaluated so the plugin's 1.8 default
+# cannot override the Java 11 target used by the generated app.
 cat >> android/build.gradle <<'EOF'
 
-subprojects {
-    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-        kotlinOptions {
-            jvmTarget = "11"
+gradle.projectsEvaluated {
+    subprojects {
+        tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+            kotlinOptions {
+                jvmTarget = "11"
+            }
         }
     }
 }
