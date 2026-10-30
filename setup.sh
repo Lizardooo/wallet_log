@@ -20,5 +20,9 @@ if ! grep -q READ_SMS "$MANIFEST"; then
   sed -i 's|<application|<uses-permission android:name="android.permission.READ_SMS"/>\n    <uses-permission android:name="android.permission.RECEIVE_SMS"/>\n    <application|' "$MANIFEST"
 fi
 
+# The SMS plugin mixes Java 11 and Kotlin 1.8 targets; newer Gradle rejects that
+# by default, so downgrade the check to a warning.
+printf '\nkotlin.jvm.target.validation.mode=warning\n' >> android/gradle.properties
+
 flutter pub get
 echo "Done. Connect an Android phone and run: flutter run"
