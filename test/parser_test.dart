@@ -76,6 +76,23 @@ void main() {
     expect(r.review, isFalse); // an explicit deduction is counted
   });
 
+  test('"وخصم X من محفظتك" is always an outgoing, counted amount', () {
+    final a = p('VF-Cash',
+        'تم تحويل 200 جنيه الى 01012345678 وخصم 201 جنيه من محفظتك. رصيدك الحالي 800 جنيه');
+    expect(a.dir, Dir.outFlow);
+    expect(a.amount, 201);
+    expect(a.balance, 800);
+    expect(a.review, isFalse);
+    final b = p('VF-Cash', 'تم شحن 50 جنيه وخصم 50 جنيه من محفظتك');
+    expect(b.dir, Dir.outFlow);
+    expect(b.amount, 50);
+    expect(b.review, isFalse);
+    final c = p('VF-Cash', 'تمت العملية بنجاح وخصم ٧٥ من محفظتك');
+    expect(c.type, TxType.deduction);
+    expect(c.amount, 75);
+    expect(c.review, isFalse);
+  });
+
   test('ambiguous direction is flagged, not guessed', () {
     final r = p('Orange Cash', 'تم تحويل 100 جنيه');
     expect(r.dir, Dir.unknown);

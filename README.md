@@ -30,6 +30,9 @@ Everything is stored locally on the phone (SQLite). Nothing is uploaded.
   payments, refunds, fees without a deduction, anything unclear) is flagged
   "تحتاج مراجعة" and stays out of all totals until you open it and press
   "تأكيد واحتساب". Nothing is guessed.
+- Any message containing "وخصم X من محفظتك" is counted as money that left the
+  wallet, and X is the amount taken (even if the message also mentions a
+  transfer, top-up or bill).
 - Each message's printed balance is checked against the previous one; a gap
   flags a missing / deleted message or a mis-read amount.
 - Corrections you make are never overwritten by later scans.

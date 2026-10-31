@@ -335,6 +335,13 @@ double? _num(String? s) =>
   return (rest: rest, balance: balance, fee: fee, amounts: amounts);
 }
 
+// Owner's rule: in a message that says "... وخصم 50 جنيه من محفظتك" the amount
+// named there is what left the wallet, whatever else the message mentions.
+final _walletDeductRe = RegExp(
+  'و?خصم\\s*(?:مبلغ\\s*)?(?:$_cur\\s*)?$_amt\\s*(?:$_cur)?\\s*'
+  '(?:رسوم\\s*)?من\\s*(?:رصيد\\s*)?(?:محفظتك|رصيدك|حسابك)',
+);
+
 /// Returns null when the message is not a completed wallet transaction.
 Parsed? parseSms(String sender, String rawBody) {
   final body = normalizeDigits(rawBody);
@@ -345,12 +352,17 @@ Parsed? parseSms(String sender, String rawBody) {
   // A message that only reports a balance has no amount left after the balance
   // is removed, so it is not recorded as a transaction.
   final ex = _extract(body, true);
+  final dedMatch = _walletDeductRe.firstMatch(body);
+  final dedAmount = dedMatch == null ? null : _num(dedMatch.group(1));
+  final viaWalletDeduction = dedAmount != null && dedAmount > 0;
 
   var fee = ex.fee;
   var amounts = ex.amounts;
   var feeOnly = false;
   if (amounts.isEmpty) {
-    if (fee > 0) {
+    if (viaWalletDeduction) {
+      amounts = [dedAmount!];
+    } else if (fee > 0) {
       amounts = [fee];
       fee = 0;
       feeOnly = true;
@@ -358,11 +370,11 @@ Parsed? parseSms(String sender, String rawBody) {
       return null;
     }
   }
-  final amount = amounts.first;
-  var review = amounts.toSet().length > 1;
+  final amount = viaWalletDeduction ? dedAmount! : amounts.first;
+  var review = !viaWalletDeduction && amounts.toSet().length > 1;
 
   final l = ex.rest.toLowerCase();
-  final TxType type;
+  TxType type;
   if (feeOnly) {
     type = TxType.fee;
   } else if (_refund.hasMatch(l)) {
@@ -385,6 +397,10 @@ Parsed? parseSms(String sender, String rawBody) {
     type = TxType.other;
   }
   final hasDeduction = _deduction.hasMatch(l);
+  if (viaWalletDeduction &&
+      (type == TxType.other || type == TxType.refund || type == TxType.cashIn)) {
+    type = TxType.deduction;
+  }
 
   final fromM = _fromRe.firstMatch(l);
   final toM = _toRe.firstMatch(l);
@@ -401,7 +417,7 @@ Parsed? parseSms(String sender, String rawBody) {
     return Dir.unknown;
   }
 
-  final Dir dir;
+  Dir dir;
   switch (type) {
     case TxType.refund:
     case TxType.cashIn:
@@ -421,9 +437,14 @@ Parsed? parseSms(String sender, String rawBody) {
       dir = wordsDir();
   }
 
-  // Only transfers (with a known direction) and explicit deductions are counted
-  // automatically. Everything else waits for the owner's confirmation.
-  final counted = (type == TxType.transfer && dir != Dir.unknown) ||
+  // "وخصم X من محفظتك" always means money left the wallet.
+  if (viaWalletDeduction) dir = Dir.outFlow;
+
+  // Only transfers (with a known direction), explicit deductions and the
+  // "وخصم X من محفظتك" rule are counted automatically. Everything else waits for
+  // the owner's confirmation.
+  final counted = viaWalletDeduction ||
+      (type == TxType.transfer && dir != Dir.unknown) ||
       type == TxType.deduction ||
       (hasDeduction && dir == Dir.outFlow);
   if (!counted) review = true;
