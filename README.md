@@ -1,4 +1,4 @@
-# Wallet Log
+# أموالي (Amwali)
 
 Flutter (Android) app for a currency trader who receives many transfers on
 several wallet numbers (Vodafone Cash, InstaPay, Orange Cash, Etisalat Cash /
@@ -7,8 +7,12 @@ Everything is stored locally on the phone (SQLite). Nothing is uploaded.
 
 ## Screens (Arabic, right-to-left)
 
-- **المعاملات** - transactions grouped by day with daily in/out totals. Tap a
-  transaction to add or edit a remark. Filter by wallet number.
+- **المعاملات** - every wallet operation, grouped by day with in / out / fee
+  totals. Filters: wallet number, operation type (transfer, cash in, cash out,
+  phone top-up, bills and services, merchant payments, refunds, fees) and a date
+  range (today, yesterday, 7 days, this month, or any custom range). Tap a
+  transaction to see the original SMS, correct its type / direction and add a
+  remark.
 - **اليومي** - per wallet number and per day: opening balance, in, out and the
   expected remaining. It is compared with the last balance printed in that day's
   SMS and flags any difference.
@@ -16,6 +20,18 @@ Everything is stored locally on the phone (SQLite). Nothing is uploaded.
   for today / 7 days / 30 days / this month / all.
 - **الحسابات** - add your own wallet numbers on this phone, and turn on the
   daily reminder notification.
+
+### Accuracy safeguards
+
+- OTP / temporary-code, failed, rejected, pending and promotional messages are
+  ignored, and balance, limit and fee amounts are separated from the amount.
+- When the type or direction is unclear the message is flagged "راجع التصنيف"
+  and left out of the in/out totals until you confirm it (never guessed).
+- Each message's printed balance is checked against the previous one; a gap
+  flags a missing / deleted message or a mis-read amount.
+- Corrections you make are never overwritten by later scans.
+- The SMS templates are not public, so the rules were built from the operations
+  Egyptian wallets offer, not from real messages. Send real samples to tune them.
 
 ### Opening balance
 

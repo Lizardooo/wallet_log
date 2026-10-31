@@ -12,8 +12,9 @@ class WalletLogApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Wallet Log',
-      theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
+      title: 'أموالي',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(colorSchemeSeed: const Color(0xFF0F766E), useMaterial3: true),
       builder: (context, child) =>
           Directionality(textDirection: TextDirection.rtl, child: child!),
       home: const HomePage(),
@@ -32,7 +33,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<Tx> _txs = [];
   List<Account> _accounts = [];
   Map<String, double> _openings = {};
-  int? _accountFilter;
+  Map<int, double> _mismatch = {};
+  final TxFilter _filter = TxFilter();
   int _tab = 0;
   bool _denied = false;
   bool _scanning = false;
@@ -63,11 +65,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final txs = await TxDb.allTx();
     final accounts = await TxDb.accounts();
     final openings = await TxDb.openings();
+    final mismatch = balanceMismatches(txs, accounts);
     if (!mounted) return;
     setState(() {
       _txs = txs;
       _accounts = accounts;
       _openings = openings;
+      _mismatch = mismatch;
     });
   }
 
@@ -86,16 +90,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       final msgs =
           await smsChannel.invokeMethod<List<dynamic>>('readInbox') ?? [];
-      for (final raw in msgs) {
-        final m = Map<String, dynamic>.from(raw as Map);
+      final raw = <RawSms>[];
+      for (final r in msgs) {
+        final m = Map<String, dynamic>.from(r as Map);
         final s = m['subId'];
-        await TxDb.addSms(
+        raw.add(RawSms(
           (m['address'] ?? '') as String,
           (m['body'] ?? '') as String,
           (m['date'] ?? 0) as int,
           (s is int && s >= 0) ? s : null,
-        );
+        ));
       }
+      await TxDb.importSms(raw);
       await _reload();
       ok = true;
     } finally {
@@ -128,10 +134,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _reload();
   }
 
-  Future<void> _editNote(Tx t) async {
-    final text = await askText(context, 'ملاحظة على المعاملة', t.note);
-    if (text == null) return;
-    await TxDb.setNote(t.id, text);
+  Future<void> _openTx(Tx t) async {
+    final r = await showTxDialog(context, t, _mismatch[t.id]);
+    if (r == null) return;
+    if (r.note != t.note) await TxDb.setNote(t.id, r.note);
+    // Saving a flagged message confirms it; a changed type/direction is kept.
+    if (t.review || r.type != t.type || r.dir != t.dir) {
+      await TxDb.setClass(t.id, r.type, r.dir);
+    }
     await _reload();
   }
 
@@ -139,7 +149,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_titles[_tab]),
+        leading: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Image.asset('assets/logo.png'),
+        ),
+        title: Text('أموالي · ${_titles[_tab]}'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -174,9 +188,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 TransactionsTab(
                   txs: _txs,
                   accounts: _accounts,
-                  accountFilter: _accountFilter,
-                  onFilter: (id) => setState(() => _accountFilter = id),
-                  onTap: _editNote,
+                  filter: _filter,
+                  mismatches: _mismatch,
+                  onChanged: () => setState(() {}),
+                  onTap: _openTx,
                   onRefresh: _scan,
                 ),
                 DailyTab(

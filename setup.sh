@@ -22,6 +22,11 @@ mkdir -p "$KT_DIR"
 cp native/*.kt "$KT_DIR/"
 
 MANIFEST=android/app/src/main/AndroidManifest.xml
+
+# App name (أموالي) and launcher icon.
+sed -i 's|android:label="[^"]*"|android:label="أموالي"|' "$MANIFEST"
+cp -r native/res/. android/app/src/main/res/
+
 if ! grep -q POST_NOTIFICATIONS "$MANIFEST"; then
   awk '/<application/ { while ((getline l < "native/permissions.xml") > 0) print l } { print }' \
     "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
