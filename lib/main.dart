@@ -138,8 +138,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final r = await showTxDialog(context, t, _mismatch[t.id]);
     if (r == null) return;
     if (r.note != t.note) await TxDb.setNote(t.id, r.note);
-    // Saving a flagged message confirms it; a changed type/direction is kept.
-    if (t.review || r.type != t.type || r.dir != t.dir) {
+    // Confirming a flagged message (or changing its type/direction) is what
+    // makes it count; saving only the note leaves it waiting for review.
+    if (r.confirm && (t.review || r.type != t.type || r.dir != t.dir)) {
       await TxDb.setClass(t.id, r.type, r.dir);
     }
     await _reload();

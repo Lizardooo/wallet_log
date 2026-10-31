@@ -25,8 +25,11 @@ Everything is stored locally on the phone (SQLite). Nothing is uploaded.
 
 - OTP / temporary-code, failed, rejected, pending and promotional messages are
   ignored, and balance, limit and fee amounts are separated from the amount.
-- When the type or direction is unclear the message is flagged "راجع التصنيف"
-  and left out of the in/out totals until you confirm it (never guessed).
+- Only **transfers** and explicit **deductions** (خصم / debited) are counted
+  automatically. Every other operation (cash in/out, top-up, bills, merchant
+  payments, refunds, fees without a deduction, anything unclear) is flagged
+  "تحتاج مراجعة" and stays out of all totals until you open it and press
+  "تأكيد واحتساب". Nothing is guessed.
 - Each message's printed balance is checked against the previous one; a gap
   flags a missing / deleted message or a mis-read amount.
 - Corrections you make are never overwritten by later scans.

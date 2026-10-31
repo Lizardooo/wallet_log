@@ -8,14 +8,29 @@
 ///  * when the direction or type cannot be told, the message is kept but flagged
 ///    for review instead of being guessed;
 ///  * balance, limit and fee amounts are separated from the transaction amount.
+///  * only transfers and explicit deductions (خصم / debited) are marked as
+///    counted; every other operation is flagged for review and stays out of the
+///    totals until the owner confirms it.
 /// Tune the word lists against your own real messages (see test/parser_test.dart).
 enum Dir { inFlow, outFlow, unknown }
 
-enum TxType { transfer, cashIn, cashOut, topup, bill, payment, refund, fee, other }
+enum TxType {
+  transfer,
+  deduction,
+  cashIn,
+  cashOut,
+  topup,
+  bill,
+  payment,
+  refund,
+  fee,
+  other,
+}
 
 extension TxTypeX on TxType {
   String get label => switch (this) {
         TxType.transfer => 'تحويل',
+        TxType.deduction => 'خصم رصيد',
         TxType.cashIn => 'إيداع نقدي',
         TxType.cashOut => 'سحب نقدي',
         TxType.topup => 'شحن رصيد',
@@ -43,7 +58,9 @@ class Parsed {
   final double fee;
   final String? party;
   final double? balance;
-  final bool review; // true when the app is not sure about type/direction/amount
+  /// true when the message is not a plain transfer / deduction, or the app is
+  /// not sure about it: it is then left out of all totals until confirmed.
+  final bool review;
 
   const Parsed({
     required this.wallet,
@@ -178,6 +195,10 @@ final _cashOut = _cat(['withdraw(?:al|n)?', 'atm'], ['سحب', 'صراف']);
 final _cashIn = _cat(
   ['deposit(?:ed)?', 'cash[ -]?in'],
   ['ايداع', 'إيداع', 'تم اضافة', 'تم إضافة', 'اضافة رصيد', 'إضافة رصيد'],
+);
+final _deduction = _cat(
+  ['debited', 'deducted', 'deduction', 'debit'],
+  ['خصم', 'استقطاع'],
 );
 final _payment = _cat(
   ['merchant', 'purchase[d]?', 'pos', 'qr', 'payment', 'paid', 'pay'],
@@ -358,9 +379,12 @@ Parsed? parseSms(String sender, String rawBody) {
     type = TxType.payment;
   } else if (_transfer.hasMatch(l)) {
     type = TxType.transfer;
+  } else if (_deduction.hasMatch(l)) {
+    type = TxType.deduction;
   } else {
     type = TxType.other;
   }
+  final hasDeduction = _deduction.hasMatch(l);
 
   final fromM = _fromRe.firstMatch(l);
   final toM = _toRe.firstMatch(l);
@@ -382,6 +406,7 @@ Parsed? parseSms(String sender, String rawBody) {
     case TxType.refund:
     case TxType.cashIn:
       dir = Dir.inFlow;
+    case TxType.deduction:
     case TxType.cashOut:
     case TxType.bill:
     case TxType.payment:
@@ -396,7 +421,12 @@ Parsed? parseSms(String sender, String rawBody) {
       dir = wordsDir();
   }
 
-  if (dir == Dir.unknown || type == TxType.other) review = true;
+  // Only transfers (with a known direction) and explicit deductions are counted
+  // automatically. Everything else waits for the owner's confirmation.
+  final counted = (type == TxType.transfer && dir != Dir.unknown) ||
+      type == TxType.deduction ||
+      (hasDeduction && dir == Dir.outFlow);
+  if (!counted) review = true;
 
   final cuePhone = dir == Dir.inFlow ? fromM?.group(1) : toM?.group(1);
   final party = cuePhone ?? _phoneRe.firstMatch(ex.rest)?.group(0);

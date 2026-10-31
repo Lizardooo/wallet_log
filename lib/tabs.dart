@@ -45,6 +45,7 @@ double? parseAmount(String s) =>
 
 IconData typeIcon(TxType t) => switch (t) {
       TxType.transfer => Icons.swap_horiz,
+      TxType.deduction => Icons.remove_circle_outline,
       TxType.cashIn => Icons.add_card,
       TxType.cashOut => Icons.payments,
       TxType.topup => Icons.phone_android,
@@ -113,8 +114,9 @@ class TxEdit {
   final String note;
   final TxType type;
   final Dir dir;
+  final bool confirm; // false = only the note was saved
 
-  const TxEdit(this.note, this.type, this.dir);
+  const TxEdit(this.note, this.type, this.dir, this.confirm);
 }
 
 /// Shows the original SMS next to the parsed result so the owner can verify it,
@@ -135,7 +137,7 @@ Future<TxEdit?> showTxDialog(BuildContext context, Tx t, double? mismatch) {
             children: [
               if (t.review)
                 const Text(
-                  '⚠ التطبيق غير متأكد من تصنيف هذه الرسالة. قارنها بنصها الأصلي ثم صحّح النوع والاتجاه.',
+                  '⚠ هذه العملية غير محسوبة في الداخل والخارج حتى تراجعها. قارنها بنص الرسالة، اختر النوع والاتجاه الصحيحين، ثم اضغط "تأكيد واحتساب".',
                   style: TextStyle(color: _orange, fontSize: 12),
                 ),
               if (mismatch != null)
@@ -202,9 +204,16 @@ Future<TxEdit?> showTxDialog(BuildContext context, Tx t, double? mismatch) {
             onPressed: () => Navigator.pop(ctx),
             child: const Text('إلغاء'),
           ),
+          if (t.review)
+            OutlinedButton(
+              onPressed: () => Navigator.pop(
+                  ctx, TxEdit(c.text.trim(), t.type, t.dir, false)),
+              child: const Text('حفظ الملاحظة فقط'),
+            ),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, TxEdit(c.text.trim(), type, dir)),
-            child: const Text('حفظ'),
+            onPressed: () =>
+                Navigator.pop(ctx, TxEdit(c.text.trim(), type, dir, true)),
+            child: Text(t.review ? 'تأكيد واحتساب' : 'حفظ'),
           ),
         ],
       ),
@@ -434,6 +443,7 @@ class TransactionsTab extends StatelessWidget {
     final shown = txs.where((t) => filter.matches(t, accounts)).toList();
     final totals = totalsOf(shown);
     final reviewCount = shown.where((t) => t.review).length;
+    final reviewTotal = txs.where((t) => t.review).length;
     final mismatchCount = shown.where((t) => mismatches.containsKey(t.id)).length;
     final presentTypes =
         TxType.values.where((ty) => txs.any((t) => t.type == ty)).toList();
@@ -492,6 +502,16 @@ class TransactionsTab extends StatelessWidget {
           ]),
         if (presentTypes.isNotEmpty)
           chipRow([
+            if (reviewTotal > 0)
+              FilterChip(
+                avatar: const Icon(Icons.rule, size: 16),
+                label: Text('تحتاج مراجعة ($reviewTotal)'),
+                selected: filter.reviewOnly,
+                onSelected: (v) {
+                  filter.reviewOnly = v;
+                  onChanged();
+                },
+              ),
             for (final ty in presentTypes)
               FilterChip(
                 avatar: Icon(typeIcon(ty), size: 16),
@@ -569,7 +589,8 @@ class TransactionsTab extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     [
-                      if (reviewCount > 0) '$reviewCount تحتاج مراجعة',
+                      if (reviewCount > 0)
+                        '$reviewCount تحتاج مراجعة (${fmt(totals.pendingSum)} غير محسوبة)',
                       if (totals.unknown > 0)
                         '${totals.unknown} بلا اتجاه (غير محسوبة)',
                       if (mismatchCount > 0) '$mismatchCount رصيدها لا يطابق',
@@ -622,7 +643,7 @@ class TransactionsTab extends StatelessWidget {
   }
 
   Widget _tile(Tx t) {
-    final color = dirColor(t.dir);
+    final color = t.review ? _orange : dirColor(t.dir);
     final acc = accountFor(t, accounts);
     final sign = t.isIn ? '+' : (t.isOut ? '-' : '');
     final mm = mismatches[t.id];
@@ -631,7 +652,7 @@ class TransactionsTab extends StatelessWidget {
       if (t.party != null) 'الطرف الآخر: ${t.party}',
       if (t.fee > 0) 'رسوم: ${fmt(t.fee)}',
       if (t.note.isNotEmpty) 'ملاحظة: ${t.note}',
-      if (t.review) '⚠ راجع التصنيف (اضغط)',
+      if (t.review) '⚠ غير محسوبة حتى تراجعها (اضغط)',
       if (mm != null) '⚠ الرصيد لا يطابق (فرق ${fmt(mm)})',
     ];
     return Column(
@@ -827,18 +848,20 @@ class _DailyTabState extends State<DailyTab> {
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  d.abs() < 0.005 ? 'مطابق للرسائل ✓' : 'فرق عن الرسائل: ${fmt(d)}',
+                  d.abs() < 0.005
+                      ? 'مطابق للرسائل ✓'
+                      : 'فرق عن الرسائل: ${fmt(d)}${r.pending > 0 ? ' (قد يكون بسبب عمليات تحت المراجعة)' : ''}',
                   style: TextStyle(
                     color: d.abs() < 0.005 ? _green : _red,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-            if (r.unknown > 0)
+            if (r.pending > 0 || r.unknown > 0)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  '⚠ ${r.unknown} معاملة بلا اتجاه لا تدخل في الحساب. صحّحها من تبويب المعاملات.',
+                  '⚠ ${r.pending + r.unknown} معاملة تحتاج مراجعة ولا تدخل في الحساب. راجعها من تبويب المعاملات.',
                   style: const TextStyle(color: _orange, fontSize: 12),
                 ),
               ),
@@ -958,11 +981,11 @@ class _ReportsTabState extends State<ReportsTab> {
                 statLine('إجمالي الخارج', fmt(all.outSum), _red),
                 statLine('إجمالي الرسوم', fmt(all.fee), null),
                 statLine('الصافي', fmt(all.net), null, bold: true),
-                if (all.unknown > 0)
+                if (all.pending > 0 || all.unknown > 0)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
-                      '⚠ ${all.unknown} معاملة بلا اتجاه غير محسوبة',
+                      '⚠ ${all.pending + all.unknown} معاملة تحتاج مراجعة (${fmt(all.pendingSum)} غير محسوبة)',
                       style: const TextStyle(fontSize: 12, color: _orange),
                     ),
                   ),
@@ -994,6 +1017,11 @@ class _ReportsTabState extends State<ReportsTab> {
                   statLine('الداخل', fmt(e.value.inSum), _green),
                   statLine('الخارج', fmt(e.value.outSum), _red),
                   if (e.value.fee > 0) statLine('الرسوم', fmt(e.value.fee), null),
+                  if (e.value.pending > 0)
+                    Text(
+                      'تحتاج مراجعة: ${e.value.pending} (${fmt(e.value.pendingSum)} غير محسوبة)',
+                      style: const TextStyle(color: _orange, fontSize: 12),
+                    ),
                 ],
               ),
             ),

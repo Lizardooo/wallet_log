@@ -34,12 +34,14 @@ void main() {
     expect(r.type, TxType.topup);
     expect(r.dir, Dir.outFlow);
     expect(r.amount, 50);
+    expect(r.review, isTrue); // not a transfer / deduction: waits for review
   });
 
   test('bill payment with fee', () {
     final r = p('VF-Cash',
         'تم دفع فاتورة الكهرباء بمبلغ 320.75 جنيه ورسوم 5 جنيه. رصيدك الحالي 1000 جنيه');
     expect(r.type, TxType.bill);
+    expect(r.review, isTrue);
     expect(r.amount, 320.75);
     expect(r.fee, 5);
     expect(r.balance, 1000);
@@ -50,9 +52,20 @@ void main() {
     expect(out.type, TxType.cashOut);
     expect(out.dir, Dir.outFlow);
     expect(out.fee, 10);
+    expect(out.review, isTrue);
     final inn = p('VF-Cash', 'تم ايداع 2000 جنيه في محفظتك. رصيدك الحالي 5000 جنيه');
     expect(inn.type, TxType.cashIn);
     expect(inn.dir, Dir.inFlow);
+    expect(inn.review, isTrue);
+  });
+
+  test('balance deduction is counted', () {
+    final r = p('VF-Cash', 'تم خصم 50 جنيه من رصيدك. رصيدك الحالي 450 جنيه');
+    expect(r.type, TxType.deduction);
+    expect(r.dir, Dir.outFlow);
+    expect(r.amount, 50);
+    expect(r.balance, 450);
+    expect(r.review, isFalse);
   });
 
   test('fee only message', () {
@@ -60,6 +73,7 @@ void main() {
     expect(r.type, TxType.fee);
     expect(r.amount, 5);
     expect(r.balance, 1995);
+    expect(r.review, isFalse); // an explicit deduction is counted
   });
 
   test('ambiguous direction is flagged, not guessed', () {

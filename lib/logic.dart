@@ -32,27 +32,37 @@ Account? accountFor(Tx t, List<Account> accounts) {
 String accountLabel(Account a) =>
     a.number.isEmpty ? a.name : '${a.name} · ${a.number}';
 
-/// In / out / fee totals. Transactions whose direction is unknown are counted
-/// separately and never added to in or out.
+/// In / out / fee totals. Only transactions that need no review are added.
+/// Those flagged for review (anything other than a transfer or a deduction, or
+/// anything uncertain) and those without a direction are tallied separately and
+/// never enter in / out / fee until the owner confirms them.
 class Totals {
   double inSum = 0;
   double outSum = 0;
   double fee = 0;
-  int count = 0;
-  int unknown = 0;
+  int count = 0; // every transaction, counted or not
+  int pending = 0; // waiting for review
+  double pendingSum = 0;
+  int unknown = 0; // confirmed but without a direction
 
   double get net => inSum - outSum - fee;
 
   void add(Tx t) {
     count++;
+    if (t.review) {
+      pending++;
+      pendingSum += t.amount;
+      return;
+    }
     if (t.isIn) {
       inSum += t.amount;
+      fee += t.fee;
     } else if (t.isOut) {
       outSum += t.amount;
+      fee += t.fee;
     } else {
       unknown++;
     }
-    fee += t.fee;
   }
 }
 
@@ -69,17 +79,23 @@ Totals totalsOf(Iterable<Tx> txs) {
 class TxFilter {
   int? accountId;
   Set<TxType> types = {};
+  bool reviewOnly = false;
   DateTime? from;
   DateTime? to;
 
   bool get isActive =>
-      accountId != null || types.isNotEmpty || from != null || to != null;
+      accountId != null ||
+      types.isNotEmpty ||
+      reviewOnly ||
+      from != null ||
+      to != null;
 
   bool matches(Tx t, List<Account> accounts) {
     if (accountId != null && accountFor(t, accounts)?.id != accountId) {
       return false;
     }
     if (types.isNotEmpty && !types.contains(t.type)) return false;
+    if (reviewOnly && !t.review) return false;
     final f = from;
     if (f != null &&
         t.ts < DateTime(f.year, f.month, f.day).millisecondsSinceEpoch) {
@@ -115,7 +131,7 @@ Map<int, double> balanceMismatches(List<Tx> all, List<Account> accounts) {
       final p = prev;
       final pb = p?.balance;
       final tb = t.balance;
-      if (pb != null && tb != null && !t.isUnknown) {
+      if (pb != null && tb != null && !t.isUnknown && !t.review) {
         final delta = t.isIn ? t.amount : -t.amount;
         final d = tb - (pb + delta - t.fee);
         if (d.abs() > 0.01) out[t.id] = d;
@@ -136,6 +152,7 @@ class DayRow {
   final double outSum;
   final double feeSum;
   final int count;
+  final int pending; // waiting for review, left out of the figures above
   final int unknown;
   final double? reported; // last balance printed in that day's SMS
 
@@ -148,6 +165,7 @@ class DayRow {
     required this.outSum,
     required this.feeSum,
     required this.count,
+    required this.pending,
     required this.unknown,
     required this.reported,
   });
@@ -207,6 +225,7 @@ List<DayRow> dailyRows(String day, List<Tx> all, List<Account> accounts,
       outSum: totals.outSum,
       feeSum: totals.fee,
       count: totals.count,
+      pending: totals.pending,
       unknown: totals.unknown,
       reported: reported,
     );
@@ -268,7 +287,7 @@ List<PartyStat> partyStats(List<Tx> txs) {
   final m = <String, PartyStat>{};
   for (final t in txs) {
     final p = t.party;
-    if (p == null || t.isUnknown) continue;
+    if (p == null || t.isUnknown || t.review) continue;
     final s = m.putIfAbsent(p, () => PartyStat(p));
     if (t.isIn) {
       s.inSum += t.amount;
