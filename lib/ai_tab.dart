@@ -28,6 +28,9 @@ class _AiTabState extends State<AiTab> {
   String? _model;
   bool _hideKey = true;
   bool _loadingModels = false;
+  bool _probing = false;
+  final Map<String, ProbeResult> _probe = {};
+  int _probeRun = 0;
   bool _showAll = false;
   bool _loaded = false;
   String? _error;
@@ -90,6 +93,8 @@ class _AiTabState extends State<AiTab> {
       });
       await TxDb.setSetting(TxDb.settingsApiKey, _key.text.trim());
       if (_model != null) await TxDb.setSetting(TxDb.settingsModel, _model!);
+      // Do not await: the list is usable at once, free status fills in.
+      if (mounted) _probeAll(list, _key.text.trim());
     } on GeminiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (e) {
@@ -97,6 +102,44 @@ class _AiTabState extends State<AiTab> {
     } finally {
       if (mounted) setState(() => _loadingModels = false);
     }
+  }
+
+  bool _isFree(GeminiModel m) {
+    final r = _probe[m.id];
+    if (r == null) return m.free;
+    return r == ProbeResult.free;
+  }
+
+  /// Tests every model with a one-token call so only models that really work
+  /// on the free tier of this key are offered as free.
+  Future<void> _probeAll(List<GeminiModel> list, String key) async {
+    final run = ++_probeRun;
+    setState(() {
+      _probing = true;
+      _probe.clear();
+    });
+    final queue = List<GeminiModel>.from(list);
+    Future<void> worker() async {
+      while (queue.isNotEmpty) {
+        final m = queue.removeLast();
+        final r = await probeGeminiModel(key, m.id);
+        if (!mounted || run != _probeRun) return;
+        setState(() => _probe[m.id] = r);
+      }
+    }
+
+    await Future.wait([for (var i = 0; i < 4; i++) worker()]);
+    if (!mounted || run != _probeRun) return;
+    setState(() {
+      _probing = false;
+      final current = _model;
+      final ok = list.where(_isFree).toList();
+      final currentOk = current != null && ok.any((m) => m.id == current);
+      if (!currentOk && ok.isNotEmpty) {
+        _model = ok.first.id;
+        TxDb.setSetting(TxDb.settingsModel, _model!);
+      }
+    });
   }
 
   Future<void> _pickModel(String id) async {
@@ -194,7 +237,7 @@ class _AiTabState extends State<AiTab> {
   Widget build(BuildContext context) {
     final unclear = _unclear.length;
     final all = widget.txs.length;
-    final shown = _showAll ? _models : _models.where((m) => m.free).toList();
+    final shown = _showAll ? _models : _models.where(_isFree).toList();
 
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -285,7 +328,9 @@ class _AiTabState extends State<AiTab> {
                   dense: true,
                   leading: const Icon(Icons.memory, size: 20),
                   title: Text(
-                    _model == null ? 'اختر موديلاً' : 'الموديل: $_model',
+                    _model == null
+                        ? 'اختر موديلاً'
+                        : 'الموديل: $_model${_probing ? ' · جاري فحص المجاني...' : ''}',
                     style: const TextStyle(fontSize: 13),
                   ),
                   trailing: TextButton(
@@ -322,7 +367,13 @@ class _AiTabState extends State<AiTab> {
                             style: const TextStyle(fontSize: 13),
                           ),
                         ),
-                        if (m.free)
+                        if (_probe[m.id] == null && _probing)
+                          const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(strokeWidth: 1.5),
+                          )
+                        else if (_isFree(m))
                           Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 6, vertical: 2),

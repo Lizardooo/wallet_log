@@ -221,8 +221,16 @@ class TxDb {
     final batch = db.batch();
     for (final m in msgs) {
       final p = parseSms(m.sender, m.body);
-      if (p == null) continue;
       final key = smsKey(m.body, m.ts);
+      if (p == null) {
+        // Saved by an older, looser parser: drop it unless the owner touched it.
+        batch.delete(
+          'tx',
+          where: "k = ? AND manual = 0 AND ai = 0 AND note = ''",
+          whereArgs: [key],
+        );
+        continue;
+      }
       final dirStr = dirString(p.dir);
       batch.insert(
         'tx',

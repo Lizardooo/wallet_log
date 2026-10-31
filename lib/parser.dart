@@ -279,6 +279,20 @@ String normalizeDigits(String s) {
 String? detectWallet(String sender, String body) {
   final s = sender.toLowerCase();
   final b = body.toLowerCase();
+  // Telecom and bank ads also mention Orange / Etisalat / Vodafone. A message
+  // counts as a wallet message only when the sender is a known wallet sender or
+  // the text itself talks about a wallet / cash account.
+  final walletSender = s.contains('cash') ||
+      s.contains('instapay') ||
+      s.contains('fawry') ||
+      s.contains('vf') ||
+      s.contains('vodafone') ||
+      s.contains('orange') ||
+      s.contains('etisalat') ||
+      s.contains('e&');
+  final walletText = RegExp(r'محفظ|كاش|wallet|cash|instapay|انستا|إنستا|فوري|fawry')
+      .hasMatch(b);
+  if (!walletSender && !walletText) return null;
   if (s.contains('instapay') || b.contains('instapay') || b.contains('انستا')) {
     return 'InstaPay';
   }
@@ -347,9 +361,22 @@ final _promo = RegExp(
   r'حول\s+فلوس|عرض|عروض|احصل\s+على|اشحن|اربح|سارع)',
 );
 
+// Cash-back, rewards, points and gifts are not money movements. The phrase and
+// the amount next to it are removed even when it sits inside a real sentence.
+final _rewardWord =
+    r'(?:(?<![a-z])(?:cash\s*-?\s*back|rewards?|bonus|gift|points?)(?![a-z])|'
+    r'كاش\s*-?\s*باك|استرداد\s*نقدي|مكاف[أا][ةه]|هدي[ةه]|هدايا|نقاط|بونص|جائز[ةه]|'
+    r'جنيه\s*(?:دهب|ذهب))';
+const _rewardAmt = r'\d[\d,]*(?:\.\d+)?\s*(?:EGP|LE|جنيه|جنية|ج\.م|ج)?';
+final _reward = RegExp(
+  '$_rewardWord[^.!؟?\\n]{0,40}?$_rewardAmt|$_rewardAmt\\s*$_rewardWord',
+  caseSensitive: false,
+);
+
 String _stripPromo(String s) {
-  final noUrl =
-      s.replaceAll(RegExp(r'(?:https?://|www\.)\S+', caseSensitive: false), ' ');
+  final noUrl = s
+      .replaceAll(RegExp(r'(?:https?://|www\.)\S+', caseSensitive: false), ' ')
+      .replaceAll(_reward, ' ');
   // Split on sentence ends only (". " / "! "), so decimals like 114.29 survive.
   return noUrl
       .split(RegExp(r'(?<=[.!؟?])\s+'))
@@ -420,6 +447,9 @@ Parsed? parseSms(String sender, String rawBody) {
   } else {
     type = TxType.other;
   }
+  // No operation word at all (a number in an ad, notice or news message):
+  // this is not a transaction, so it is ignored instead of flagged for review.
+  if (type == TxType.other && !viaWalletDeduction) return null;
   final hasDeduction = _deduction.hasMatch(l);
   if (viaWalletDeduction &&
       (type == TxType.other || type == TxType.refund || type == TxType.cashIn)) {
@@ -486,4 +516,55 @@ Parsed? parseSms(String sender, String rawBody) {
     balance: ex.balance,
     review: review,
   );
+}
+
+/// Best-effort operation type from free text (used by the Excel import).
+TxType typeFromText(String text) {
+  final l = normalizeDigits(text).toLowerCase();
+  if (_refund.hasMatch(l)) return TxType.refund;
+  if (_topup.hasMatch(l)) return TxType.topup;
+  if (_bill.hasMatch(l)) return TxType.bill;
+  if (_cashOut.hasMatch(l)) return TxType.cashOut;
+  if (_cashIn.hasMatch(l)) return TxType.cashIn;
+  if (_payment.hasMatch(l)) return TxType.payment;
+  if (_transfer.hasMatch(l)) return TxType.transfer;
+  if (_deduction.hasMatch(l)) return TxType.deduction;
+  if (RegExp(r'رسوم|عمولة|fee').hasMatch(l)) return TxType.fee;
+  return TxType.other;
+}
+
+/// Direction from a label such as "وارد" / "خارج" / "credit" / "debit".
+Dir dirFromText(String text) {
+  final l = normalizeDigits(text).trim().toLowerCase();
+  if (l.isEmpty) return Dir.unknown;
+  bool has(List<String> words) => words.any((w) => l.contains(w));
+  final inAr = has(['وارد', 'داخل', 'دائن', 'استلام', 'استلمت', 'ايداع', 'إيداع']);
+  final outAr = has(['صادر', 'خارج', 'مدين', 'ارسال', 'إرسال', 'سحب', 'دفع', 'خصم']);
+  final tokens =
+      l.split(RegExp(r'[^a-z+\-]+')).where((t) => t.isNotEmpty).toSet();
+  const inLatin = {'in', 'credit', 'received', 'income', 'cr', '+'};
+  const outLatin = {'out', 'debit', 'sent', 'expense', 'dr', '-'};
+  final i = inAr || tokens.any((t) => inLatin.contains(t));
+  final o = outAr || tokens.any((t) => outLatin.contains(t));
+  if (i && !o) return Dir.inFlow;
+  if (o && !i) return Dir.outFlow;
+  return Dir.unknown;
+}
+
+/// Wallet name from free text, or null when it is not recognisable.
+String? walletFromText(String text) {
+  final t = text.toLowerCase();
+  if (t.contains('instapay') || t.contains('انستا')) return 'InstaPay';
+  if (t.contains('orange') || t.contains('اورنج') || t.contains('أورنج')) {
+    return 'Orange Cash';
+  }
+  if (t.contains('vodafone') || t.contains('فودافون')) return 'Vodafone Cash';
+  if (t.contains('etisalat') ||
+      t.contains('اتصالات') ||
+      t.contains('e&') ||
+      t.contains('fawry') ||
+      t.contains('فوري')) {
+    return 'Etisalat Cash / Fawry';
+  }
+  return null;
 }

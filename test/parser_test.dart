@@ -128,4 +128,22 @@ void main() {
     expect(parseSms('VF-Cash', 'عرض خاص: اشحن بـ 20 جنيه واحصل على 5GB'), isNull);
     expect(parseSms('VF-Cash', 'Your balance is EGP 3,400.00'), isNull);
   });
+
+  test('cash-back and reward messages are not transactions', () {
+    expect(parseSms('VF-Cash', 'مبروك! حصلت على 5 جنيه كاش باك على تحويلك الأخير'), isNull);
+    expect(parseSms('VF-Cash', 'تم إضافة 10 جنيه مكافأة إلى محفظتك'), isNull);
+    expect(parseSms('VF-Cash', 'رصيد حسابك في فودافون كاش 150 جنيه'), isNull);
+  });
+
+  test('cash-back inside a real transfer message is dropped, transfer kept', () {
+    final r = p('VF-Cash',
+        'تم تحويل 200 جنيه الى 01012345678 بنجاح وحصلت على 5 جنيه كاش باك. رصيدك الحالي 900 جنيه');
+    expect(r.amount, 200);
+    expect(r.review, isFalse);
+  });
+
+  test('telecom ads that merely mention Orange or Etisalat are ignored', () {
+    expect(parseSms('Orange', 'باقة جديدة بـ 100 جنيه فقط مع اورنج، 20 جيجا'), isNull);
+    expect(parseSms('Etisalat', 'جدد باقتك بمبلغ 50 جنيه واستمتع'), isNull);
+  });
 }

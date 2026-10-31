@@ -133,6 +133,17 @@ Never _fail(http.Response res) {
   throw GeminiException(detail.isEmpty ? msg : '$msg\n$detail');
 }
 
+String _netMessage(String raw) {
+  final l = raw.toLowerCase();
+  if (l.contains('permission') || l.contains('not permitted')) {
+    return 'التطبيق ليس لديه إذن الإنترنت. ثبّت أحدث نسخة من التطبيق.';
+  }
+  if (l.contains('lookup') || l.contains('resolve') || l.contains('unreachable')) {
+    return 'لا يوجد اتصال بالإنترنت. اتصل بالشبكة ثم أعد المحاولة.';
+  }
+  return 'تعذر الاتصال بجوجل: $raw';
+}
+
 String _cleanModel(String model) {
   var m = model.trim();
   if (m.startsWith('models/')) m = m.substring('models/'.length);
@@ -151,36 +162,48 @@ Future<List<GeminiModel>> listGeminiModels(
   }
   final c = client ?? http.Client();
   try {
-    final uri = Uri.parse('$_base/models')
-        .replace(queryParameters: {'key': key, 'pageSize': '1000'});
-    final res = await c
-        .get(uri, headers: {'Accept': 'application/json'})
-        .timeout(const Duration(seconds: 40));
-    if (res.statusCode != 200) _fail(res);
-
-    final decoded = jsonDecode(res.body);
-    if (decoded is! Map) {
-      throw const GeminiException('رد غير متوقع من جوجل.');
-    }
-    final list = decoded['models'];
     final out = <GeminiModel>[];
-    if (list is List) {
-      for (final e in list) {
-        if (e is! Map) continue;
-        final name = (e['name'] ?? '').toString();
-        final id = _cleanModel(name);
-        if (id.isEmpty || !_usable(id)) continue;
-        final methods = e['supportedGenerationMethods'];
-        if (methods is List &&
-            !methods.map((m) => m.toString()).contains('generateContent')) {
-          continue;
+    final seen = <String>{};
+    String? pageToken;
+    for (var page = 0; page < 10; page++) {
+      final uri = Uri.parse('$_base/models').replace(queryParameters: {
+        'pageSize': '1000',
+        if (pageToken != null) 'pageToken': pageToken,
+      });
+      final res = await c.get(uri, headers: {
+        'Accept': 'application/json',
+        'x-goog-api-key': key,
+      }).timeout(const Duration(seconds: 40));
+      if (res.statusCode != 200) _fail(res);
+
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map) {
+        throw const GeminiException('رد غير متوقع من جوجل.');
+      }
+      final list = decoded['models'];
+      if (list is List) {
+        for (final e in list) {
+          if (e is! Map) continue;
+          final id = _cleanModel((e['name'] ?? '').toString());
+          if (id.isEmpty || !_usable(id) || !seen.add(id)) continue;
+          final methods = e['supportedGenerationMethods'];
+          if (methods is List &&
+              !methods.map((m) => m.toString()).contains('generateContent')) {
+            continue;
+          }
+          out.add(GeminiModel(
+            id: id,
+            displayName: (e['displayName'] ?? id).toString(),
+            description: (e['description'] ?? '').toString(),
+            free: isFreeModel(id),
+          ));
         }
-        out.add(GeminiModel(
-          id: id,
-          displayName: (e['displayName'] ?? id).toString(),
-          description: (e['description'] ?? '').toString(),
-          free: isFreeModel(id),
-        ));
+      }
+      final next = decoded['nextPageToken'];
+      if (next is String && next.isNotEmpty) {
+        pageToken = next;
+      } else {
+        break;
       }
     }
     if (out.isEmpty) {
@@ -199,9 +222,8 @@ Future<List<GeminiModel>> listGeminiModels(
   } on TimeoutException {
     throw const GeminiException(
         'انتهت مدة الاتصال بجوجل. تحقق من الإنترنت وحاول مرة أخرى.');
-  } on SocketException {
-    throw const GeminiException(
-        'لا يوجد اتصال بالإنترنت. اتصل بالشبكة ثم أعد المحاولة.');
+  } on SocketException catch (e) {
+    throw GeminiException(_netMessage(e.message));
   } on http.ClientException catch (e) {
     throw GeminiException('تعذر الوصول إلى جوجل: ${e.message}');
   } on FormatException {
@@ -231,7 +253,9 @@ const _systemPrompt = '''
 3. رسالة الرصيد المتبقي ليست عملية. مبلغ الحد الأقصى أو الرسوم وحده ليس مبلغ
    العملية إذا كانت الرسالة تذكر عملية أخرى.
 4. التحويل المستلم من رقم آخر = transfer + in. المرسل إلى رقم آخر = transfer + out.
-5. لا تخترع أرقاماً غير موجودة في نص الرسالة.
+5. رسائل الكاش باك والمكافآت والعروض والإعلانات وأي رسالة فيها رقم دون عملية
+   مالية مكتملة ليست معاملة: type = other و dir = unknown و reason توضح السبب.
+6. لا تخترع أرقاماً غير موجودة في نص الرسالة.
 ''';
 
 String _buildPrompt(List<AiItem> items) {
@@ -269,8 +293,7 @@ Future<List<AiClass>> classifyMessages({
   final c = client ?? http.Client();
   try {
     final uri =
-        Uri.parse('$_base/models/${Uri.encodeComponent(id)}:generateContent')
-            .replace(queryParameters: {'key': key});
+        Uri.parse('$_base/models/${Uri.encodeComponent(id)}:generateContent');
     final body = jsonEncode({
       'systemInstruction': {
         'role': 'system',
@@ -292,7 +315,12 @@ Future<List<AiClass>> classifyMessages({
       },
     });
     final res = await c
-        .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+        .post(uri,
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': key,
+            },
+            body: body)
         .timeout(const Duration(seconds: 120));
     if (res.statusCode != 200) _fail(res);
 
@@ -308,9 +336,8 @@ Future<List<AiClass>> classifyMessages({
   } on TimeoutException {
     throw const GeminiException(
         'الموديل تأخر في الرد. قلّل عدد الرسائل أو اختر موديلاً أسرع.');
-  } on SocketException {
-    throw const GeminiException(
-        'لا يوجد اتصال بالإنترنت. اتصل بالشبكة ثم أعد المحاولة.');
+  } on SocketException catch (e) {
+    throw GeminiException(_netMessage(e.message));
   } on http.ClientException catch (e) {
     throw GeminiException('تعذر الوصول إلى جوجل: ${e.message}');
   } on FormatException {
@@ -435,4 +462,54 @@ Dir _asDir(dynamic v) {
     return Dir.outFlow;
   }
   return Dir.unknown;
+}
+
+
+/// Result of a one-token test call.
+enum ProbeResult { free, paidOnly, failed }
+
+/// Sends a tiny request to see whether [model] works on this key's free tier.
+/// A 429 that mentions "limit: 0" / free tier means the model has no free quota.
+Future<ProbeResult> probeGeminiModel(
+  String apiKey,
+  String model, {
+  http.Client? client,
+}) async {
+  final c = client ?? http.Client();
+  try {
+    final uri = Uri.parse(
+        '$_base/models/${Uri.encodeComponent(_cleanModel(model))}:generateContent');
+    final res = await c
+        .post(
+          uri,
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey.trim(),
+          },
+          body: jsonEncode({
+            'contents': [
+              {
+                'role': 'user',
+                'parts': [
+                  {'text': 'ping'}
+                ],
+              }
+            ],
+            'generationConfig': {'maxOutputTokens': 16},
+          }),
+        )
+        .timeout(const Duration(seconds: 25));
+    if (res.statusCode == 200) return ProbeResult.free;
+    final l = res.body.toLowerCase();
+    if (res.statusCode == 429 &&
+        (l.contains('limit: 0') || l.contains('free_tier') || l.contains('free tier'))) {
+      return ProbeResult.paidOnly;
+    }
+    if (res.statusCode == 429) return ProbeResult.free; // free, just busy now
+    return ProbeResult.failed;
+  } catch (_) {
+    return ProbeResult.failed;
+  } finally {
+    if (client == null) c.close();
+  }
 }
