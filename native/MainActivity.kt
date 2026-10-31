@@ -1,13 +1,11 @@
 package com.example.wallet_log
 
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.telephony.SubscriptionManager
-import android.telephony.TelephonyManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -86,10 +84,9 @@ class MainActivity : FlutterActivity() {
      */
     private fun simInfo(): List<Map<String, Any?>> {
         if (!hasPerm(Manifest.permission.READ_PHONE_STATE)) return emptyList()
-        val tm = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-            ?: return emptyList()
+        if (Build.VERSION.SDK_INT < 22) return emptyList()
         val subs = try {
-            tm.activeSubscriptionInfoList
+            SubscriptionManager.from(applicationContext).activeSubscriptionInfoList
         } catch (e: Exception) {
             null
         } ?: return emptyList()
