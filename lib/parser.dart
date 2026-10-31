@@ -244,6 +244,20 @@ final _fromMe = RegExp(
 final _walletWord = RegExp(r'محفظ|wallet');
 final _phoneRe = RegExp(r'01\d{9}');
 
+/// Stable across app and Dart versions (String.hashCode is not guaranteed to be).
+int stableHash(String s) {
+  var h = 0x811c9dc5;
+  for (final u in s.codeUnits) {
+    h ^= u;
+    h = (h * 0x01000193) & 0xFFFFFFFF;
+  }
+  return h;
+}
+
+/// Duplicate-detection key for an SMS. Kept here (not in the database layer) so
+/// the Excel importer can build keys without touching SQLite.
+String smsKey(String body, int ts) => '${stableHash(body.trim())}|${ts ~/ 300000}';
+
 String normalizeDigits(String s) {
   const ar = '٠١٢٣٤٥٦٧٨٩';
   final b = StringBuffer();

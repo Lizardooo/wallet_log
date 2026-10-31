@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'ai_tab.dart';
 import 'db.dart';
 import 'logic.dart';
+import 'onboarding.dart';
 import 'tabs.dart';
 
 void main() => runApp(const WalletLogApp());
@@ -38,16 +40,38 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int _tab = 0;
   bool _denied = false;
   bool _scanning = false;
+  bool _ready = false;
+  bool _setupDone = false;
   String? _promptedDay;
 
-  static const _titles = ['المعاملات', 'اليومي', 'التقارير', 'الحسابات'];
+  static const _titles = [
+    'المعاملات',
+    'اليومي',
+    'التقارير',
+    'الحسابات',
+    'الذكاء الاصطناعي',
+  ];
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _reload();
-    _scan();
+    _boot();
+  }
+
+  /// First run opens the setup wizard; later runs go straight to the data.
+  Future<void> _boot() async {
+    await _reload();
+    if (!mounted) return;
+    if (_setupDone) await _scan();
+  }
+
+  Future<void> _afterSetup() async {
+    await _reload();
+    if (!mounted) return;
+    // The owner finished (or skipped) the wizard: show the reports first.
+    setState(() => _tab = 2);
+    await _scan();
   }
 
   @override
@@ -58,13 +82,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && !_denied) _scan();
+    if (state == AppLifecycleState.resumed && !_denied && _setupDone) {
+      _scan();
+    }
   }
 
   Future<void> _reload() async {
     final txs = await TxDb.allTx();
     final accounts = await TxDb.accounts();
     final openings = await TxDb.openings();
+    final settings = await TxDb.allSettings();
     final mismatch = balanceMismatches(txs, accounts);
     if (!mounted) return;
     setState(() {
@@ -72,6 +99,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _accounts = accounts;
       _openings = openings;
       _mismatch = mismatch;
+      _setupDone = settings[TxDb.settingsSetupDone] == '1';
+      _ready = true;
     });
   }
 
@@ -148,6 +177,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (!_ready) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (!_setupDone) {
+      return OnboardingPage(onDone: _afterSetup);
+    }
     return Scaffold(
       appBar: AppBar(
         leading: Padding(
@@ -204,7 +239,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     await _reload();
                   },
                 ),
-                ReportsTab(txs: _txs, accounts: _accounts),
+                ReportsTab(
+                  txs: _txs,
+                  accounts: _accounts,
+                  onChanged: _reload,
+                ),
                 AccountsTab(
                   txs: _txs,
                   accounts: _accounts,
@@ -217,6 +256,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     await _reload();
                   },
                 ),
+                AiTab(txs: _txs, onChanged: _reload),
               ],
             ),
       bottomNavigationBar: NavigationBar(
@@ -228,6 +268,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           NavigationDestination(icon: Icon(Icons.bar_chart), label: 'التقارير'),
           NavigationDestination(
               icon: Icon(Icons.account_balance_wallet), label: 'الحسابات'),
+          NavigationDestination(icon: Icon(Icons.auto_awesome), label: 'الذكاء'),
         ],
       ),
     );

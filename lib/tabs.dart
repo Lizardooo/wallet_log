@@ -1,7 +1,9 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'db.dart';
+import 'importer.dart';
 import 'logic.dart';
 import 'parser.dart';
 
@@ -144,6 +146,11 @@ Future<TxEdit?> showTxDialog(BuildContext context, Tx t, double? mismatch) {
                 Text(
                   '⚠ الرصيد المكتوب في الرسالة لا يطابق الحساب (فرق ${fmt(mismatch)}). قد تكون هناك رسالة ناقصة أو محذوفة.',
                   style: const TextStyle(color: _red, fontSize: 12),
+                ),
+              if (t.ai)
+                Text(
+                  '🤖 تحليل الموديل: ${t.aiNote.isEmpty ? 'بدون تفصيل' : t.aiNote}',
+                  style: const TextStyle(color: _green, fontSize: 12),
                 ),
               const SizedBox(height: 8),
               const Text('نص الرسالة',
@@ -377,6 +384,7 @@ Future<Account?> editAccount(
                     wallet: wallet,
                     number: normalizeDigits(number.text.trim()),
                     subId: sub,
+                    slot: existing?.slot,
                   ),
                 );
               },
@@ -652,6 +660,7 @@ class TransactionsTab extends StatelessWidget {
       if (t.party != null) 'الطرف الآخر: ${t.party}',
       if (t.fee > 0) 'رسوم: ${fmt(t.fee)}',
       if (t.note.isNotEmpty) 'ملاحظة: ${t.note}',
+      if (t.ai && t.aiNote.isNotEmpty) '🤖 ${t.aiNote}',
       if (t.review) '⚠ غير محسوبة حتى تراجعها (اضغط)',
       if (mm != null) '⚠ الرصيد لا يطابق (فرق ${fmt(mm)})',
     ];
@@ -669,6 +678,11 @@ class TransactionsTab extends StatelessWidget {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (t.ai)
+                const Padding(
+                  padding: EdgeInsets.only(left: 4),
+                  child: Icon(Icons.auto_awesome, size: 18, color: _green),
+                ),
               if (t.balance != null)
                 Text('رصيد ${fmt(t.balance!)}',
                     style: const TextStyle(fontSize: 12)),
@@ -877,8 +891,14 @@ class _DailyTabState extends State<DailyTab> {
 class ReportsTab extends StatefulWidget {
   final List<Tx> txs;
   final List<Account> accounts;
+  final Future<void> Function() onChanged;
 
-  const ReportsTab({super.key, required this.txs, required this.accounts});
+  const ReportsTab({
+    super.key,
+    required this.txs,
+    required this.accounts,
+    required this.onChanged,
+  });
 
   @override
   State<ReportsTab> createState() => _ReportsTabState();
@@ -937,6 +957,72 @@ class _ReportsTabState extends State<ReportsTab> {
     }
   }
 
+  void _snack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// Imports a report the owner exported from Excel / Google Sheets. The sheet
+  /// and the recognized columns are shown before anything is stored.
+  Future<void> _importExcel() async {
+    try {
+      const group = XTypeGroup(
+        label: 'Excel',
+        extensions: ['xlsx'],
+        mimeTypes: [
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ],
+        uniformTypeIdentifiers: ['org.openxmlformats.spreadsheetml.sheet'],
+      );
+      final file = await openFile(acceptedTypeGroups: [group]);
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      final workbook = readWorkbook(bytes);
+      if (workbook.error != null) {
+        _snack(workbook.error!);
+        return;
+      }
+      if (workbook.isEmpty) {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('لم أجد صفوفاً واضحة'),
+              content: Text(
+                'قرأت الملف لكن لم أتعرف على صفوف فيها تاريخ ومبلغ.\n'
+                'الأعمدة المطلوبة على الأقل: تاريخ + مبلغ، ويفضل كمان: نوع '
+                'العملية، الاتجاه، المحفظة، البيان.\n\n'
+                'الأعمدة التي كانت في الملف: '
+                '${workbook.sheets.map((s) => '${s.name} (${s.columns.join('، ')})').join(' · ')}',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('حسناً'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+      if (!mounted) return;
+      final sheet = await showDialog<SheetImport>(
+        context: context,
+        builder: (ctx) => _ImportDialog(sheets: workbook.sheets),
+      );
+      if (sheet == null) return;
+      final added = await TxDb.importRows(sheet.rows);
+      await widget.onChanged();
+      _snack(added == 0
+          ? 'كل صفوف "${sheet.name}" موجودة بالفعل، لم يتغير شيء.'
+          : 'تم استيراد $added معاملة من "${sheet.name}" إلى التقارير.');
+    } catch (e) {
+      _snack('تعذر استيراد الملف: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final from = _from();
@@ -969,6 +1055,12 @@ class _ReportsTabState extends State<ReportsTab> {
               onSelected: (_) => _pickCustom(),
             ),
           ],
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _importExcel,
+          icon: const Icon(Icons.upload_file, size: 18),
+          label: const Text('استيراد تقرير Excel (.xlsx)'),
         ),
         const SizedBox(height: 8),
         Card(
@@ -1206,7 +1298,7 @@ class _AccountsTabState extends State<AccountsTab> {
               title: Text(a.name),
               subtitle: Text(
                 '${a.wallet}${a.number.isEmpty ? '' : ' · ${a.number}'}'
-                '${a.subId == null ? '' : ' · شريحة ${a.subId}'}',
+                '${a.slot == null ? '' : ' · شريحة ${a.slot! + 1}'}',
               ),
               onTap: () => _edit(a),
               trailing: IconButton(
@@ -1220,6 +1312,106 @@ class _AccountsTabState extends State<AccountsTab> {
           onPressed: () => _edit(null),
           icon: const Icon(Icons.add),
           label: const Text('إضافة رقم محفظة'),
+        ),
+      ],
+    );
+  }
+}
+
+// ------------------------------------------------------------- excel import
+
+/// Lets the owner pick a sheet and shows what was understood before importing.
+class _ImportDialog extends StatefulWidget {
+  final List<SheetImport> sheets;
+
+  const _ImportDialog({required this.sheets});
+
+  @override
+  State<_ImportDialog> createState() => _ImportDialogState();
+}
+
+class _ImportDialogState extends State<_ImportDialog> {
+  int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    for (var i = 1; i < widget.sheets.length; i++) {
+      if (widget.sheets[i].rows.length > widget.sheets[_index].rows.length) {
+        _index = i;
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.sheets[_index];
+    return AlertDialog(
+      title: const Text('استيراد تقرير Excel'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.sheets.length > 1) ...[
+              const Text('الصفحة', style: TextStyle(fontSize: 12)),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  for (var i = 0; i < widget.sheets.length; i++)
+                    ChoiceChip(
+                      label: Text(
+                          '${widget.sheets[i].name} (${widget.sheets[i].rows.length})'),
+                      selected: _index == i,
+                      onSelected: (_) => setState(() => _index = i),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
+            Text(
+              'الأعمدة: ${s.columns.isEmpty ? 'لم يتم التعرف عليها' : s.columns.join(' · ')}',
+              style: const TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${s.rows.length} صف جاهز من ${s.total}'
+              '${s.skipped > 0 ? ' · ${s.skipped} صف مستبعد (رصيد أو صف إجمالي أو بدون مبلغ)' : ''}',
+              style: const TextStyle(fontSize: 12),
+            ),
+            if (s.preview.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black12,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  s.preview.join('\n'),
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            const Text(
+              'الصفوف المستوردة تُضاف للمعاملات وتظهر في التقارير حسب تاريخها، '
+              'ولا تتأثر بإعادة قراءة الرسائل.',
+              style: TextStyle(fontSize: 11),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('إلغاء'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, s),
+          child: Text('استيراد ${s.rows.length}'),
         ),
       ],
     );

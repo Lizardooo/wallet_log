@@ -26,7 +26,13 @@ Account? accountFor(Tx t, List<Account> accounts) {
   }
   if (cands.length == 1) return cands.first;
   final open = cands.where((a) => a.subId == null).toList();
-  return open.length == 1 ? open.first : null;
+  if (open.length == 1) return open.first;
+  // Rows imported from Excel carry the wallet number in [Tx.wallet] instead of
+  // a wallet type, so link them to the account that owns that number.
+  final byNumber = accounts
+      .where((a) => a.number.isNotEmpty && a.number == t.wallet)
+      .toList();
+  return byNumber.length == 1 ? byNumber.first : null;
 }
 
 String accountLabel(Account a) =>

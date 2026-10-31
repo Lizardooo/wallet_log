@@ -1,10 +1,13 @@
 package com.example.wallet_log
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
+import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -25,6 +28,9 @@ class MainActivity : FlutterActivity() {
                         if (Build.VERSION.SDK_INT < 33) result.success(true)
                         else requestPerm("android.permission.POST_NOTIFICATIONS", result)
                     "readInbox" -> readInbox(result)
+                    "requestPhoneState" ->
+                        requestPerm(Manifest.permission.READ_PHONE_STATE, result)
+                    "simInfo" -> result.success(simInfo())
                     "scheduleDaily" -> {
                         val h = call.argument<Int>("hour") ?: 9
                         val m = call.argument<Int>("minute") ?: 0
@@ -70,6 +76,35 @@ class MainActivity : FlutterActivity() {
                 grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
             )
             pending = null
+        }
+    }
+
+    /**
+     * The phone's SIMs: which slot each one sits in, its carrier and the
+     * subscription id that SMS rows carry. Used by the first-run setup so the
+     * owner can say which SIM receives each wallet's messages.
+     */
+    private fun simInfo(): List<Map<String, Any?>> {
+        if (!hasPerm(Manifest.permission.READ_PHONE_STATE)) return emptyList()
+        val tm = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+            ?: return emptyList()
+        val subs = try {
+            tm.activeSubscriptionInfoList
+        } catch (e: Exception) {
+            null
+        } ?: return emptyList()
+        return subs.map { s ->
+            val number = try {
+                if (hasPerm(Manifest.permission.READ_PHONE_NUMBERS)) s.number else null
+            } catch (e: Exception) {
+                null
+            }
+            mapOf(
+                "subId" to s.subscriptionId,
+                "slot" to s.simSlotIndex,
+                "carrier" to (s.carrierName?.toString() ?: ""),
+                "number" to number
+            )
         }
     }
 
