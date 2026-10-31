@@ -93,6 +93,29 @@ void main() {
     expect(c.review, isFalse);
   });
 
+  test('real Vodafone Cash top-up with promo footer', () {
+    final r = p(
+      'VF-Cash',
+      'تم شحن رصيد موبايلك ب 80 بنجاح وخصم 114.29 من محفظتك شاملة الضريبة; '
+      'رصيد حسابك في فودافون كاش الحالي 8.98. حول فلوس لأي محفظة وزود فرصك '
+      'تكسب جنيه دهب! وكمان هيجيلك لحد 100ج كاش باك. '
+      'http://vf.eg/vfcash?id=money_transfer',
+    );
+    expect(r.type, TxType.topup);
+    expect(r.dir, Dir.outFlow);
+    expect(r.amount, 114.29); // what left the wallet, not the 80 face value
+    expect(r.balance, 8.98);
+    expect(r.fee, 0);
+    expect(r.review, isFalse);
+  });
+
+  test('promo footer amounts are never read as the transaction', () {
+    final r = p('VF-Cash',
+        'تم تحويل 100 جنيه الى 01012345678 بنجاح. رصيدك الحالي 900 جنيه. وكمان هيجيلك لحد 100 جنيه كاش باك! http://vf.eg/x');
+    expect(r.amount, 100);
+    expect(r.balance, 900);
+  });
+
   test('ambiguous direction is flagged, not guessed', () {
     final r = p('Orange Cash', 'تم تحويل 100 جنيه');
     expect(r.dir, Dir.unknown);

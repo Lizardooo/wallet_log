@@ -85,7 +85,7 @@ final _amountRe =
 final _balanceRe = RegExp(
   '(?:balance|رصيدك|رصيد\\s+(?:المحفظة|محفظتك|حسابك|الحالي|المتاح|الجديد)|'
   'الرصيد\\s+(?:الحالي|المتاح|الجديد|المتبقي|بعد))'
-  '(?:(?!مبلغ)\\D){0,20}?(?:$_cur\\s*)?$_amt',
+  '(?:(?!مبلغ|\\sبـ?\\s?\\d)\\D){0,40}?(?:$_cur\\s*)?$_amt',
   caseSensitive: false,
 );
 
@@ -123,11 +123,6 @@ final _skip = _cat(
     'cancel(?:l?ed)?',
     'expired',
     'pending',
-    'offers?',
-    'promo(?:tion)?',
-    'win',
-    'enjoy',
-    'hurry',
   ],
   [
     'مؤقت',
@@ -143,12 +138,6 @@ final _skip = _cat(
     'منتهي',
     'قيد المعالجة',
     'قيد التنفيذ',
-    'عرض',
-    'عروض',
-    'احصل على',
-    'اشحن',
-    'اربح',
-    'سارع',
   ],
 );
 
@@ -335,6 +324,25 @@ double? _num(String? s) =>
   return (rest: rest, balance: balance, fee: fee, amounts: amounts);
 }
 
+// Promotional sentences (cash-back offers, "transfer money and win...") often
+// follow the real transaction text. They are removed before parsing so their
+// amounts ("100ج كاش باك") are never mistaken for the transaction.
+final _promo = RegExp(
+  r'(?<![a-z])(?:cash\s*back|offers?|promo(?:tion)?|win|enjoy|hurry)(?![a-z])|'
+  r'(?<![\u0621-\u064A])(?:كاش\s*باك|فرصك|تكسب|جنيه\s*(?:دهب|ذهب)|هيجيلك|'
+  r'حول\s+فلوس|عرض|عروض|احصل\s+على|اشحن|اربح|سارع)',
+);
+
+String _stripPromo(String s) {
+  final noUrl =
+      s.replaceAll(RegExp(r'(?:https?://|www\.)\S+', caseSensitive: false), ' ');
+  // Split on sentence ends only (". " / "! "), so decimals like 114.29 survive.
+  return noUrl
+      .split(RegExp(r'(?<=[.!؟?])\s+'))
+      .where((part) => !_promo.hasMatch(part.toLowerCase()))
+      .join(' ');
+}
+
 // Owner's rule: in a message that says "... وخصم 50 جنيه من محفظتك" the amount
 // named there is what left the wallet, whatever else the message mentions.
 final _walletDeductRe = RegExp(
@@ -344,9 +352,10 @@ final _walletDeductRe = RegExp(
 
 /// Returns null when the message is not a completed wallet transaction.
 Parsed? parseSms(String sender, String rawBody) {
-  final body = normalizeDigits(rawBody);
-  final wallet = detectWallet(sender, body);
+  final full = normalizeDigits(rawBody);
+  final wallet = detectWallet(sender, full); // the link / footer helps here
   if (wallet == null) return null;
+  final body = _stripPromo(full);
   if (_skip.hasMatch(body.toLowerCase())) return null;
 
   // A message that only reports a balance has no amount left after the balance
@@ -370,6 +379,7 @@ Parsed? parseSms(String sender, String rawBody) {
       return null;
     }
   }
+  if (viaWalletDeduction) fee = 0; // X already includes any fee / tax
   final amount = viaWalletDeduction ? dedAmount! : amounts.first;
   var review = !viaWalletDeduction && amounts.toSet().length > 1;
 
