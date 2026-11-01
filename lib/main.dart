@@ -25,7 +25,10 @@ class WalletLogApp extends StatelessWidget {
       ],
       locale: const Locale('ar'),
       supportedLocales: const [Locale('ar'), Locale('en')],
-      theme: ThemeData(colorSchemeSeed: const Color(0xFF0F766E), useMaterial3: true),
+      theme: ThemeData(
+        colorSchemeSeed: const Color(0xFF0F766E),
+        useMaterial3: true,
+      ),
       home: const HomePage(),
     );
   }
@@ -44,6 +47,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Map<String, double> _openings = {};
   Map<int, double> _mismatch = {};
   final TxFilter _filter = TxFilter();
+  final TxFilter _reportFilter = TxFilter(period: DatePeriod.thisMonth);
   int _tab = 0;
   bool _denied = false;
   bool _scanning = false;
@@ -100,6 +104,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final openings = await TxDb.openings();
     final settings = await TxDb.allSettings();
     final mismatch = balanceMismatches(txs, accounts);
+    // A deleted account must not leave a hidden filter with no possible match.
+    final accountIds = accounts.map((a) => a.id).toSet();
+    for (final filter in [_filter, _reportFilter]) {
+      if (filter.accountId != null && !accountIds.contains(filter.accountId)) {
+        filter.accountId = null;
+      }
+    }
     if (!mounted) return;
     setState(() {
       _txs = txs;
@@ -130,12 +141,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       for (final r in msgs) {
         final m = Map<String, dynamic>.from(r as Map);
         final s = m['subId'];
-        raw.add(RawSms(
-          (m['address'] ?? '') as String,
-          (m['body'] ?? '') as String,
-          (m['date'] ?? 0) as int,
-          (s is int && s >= 0) ? s : null,
-        ));
+        raw.add(
+          RawSms(
+            (m['address'] ?? '') as String,
+            (m['body'] ?? '') as String,
+            (m['date'] ?? 0) as int,
+            (s is int && s >= 0) ? s : null,
+          ),
+        );
       }
       await TxDb.importSms(raw, accounts: _accounts);
       await _reload();
@@ -205,7 +218,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               context,
               txs: _tab == 0
                   ? _txs.where((t) => _filter.matches(t, _accounts)).toList()
-                  : _txs,
+                  : _tab == 2
+                      ? _txs
+                          .where((t) => _reportFilter.matchesBase(t, _accounts))
+                          .toList()
+                      : _txs,
               accounts: _accounts,
             ),
           ),
@@ -233,10 +250,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed: _scan,
-                      child: const Text('السماح'),
-                    ),
+                    FilledButton(onPressed: _scan, child: const Text('السماح')),
                   ],
                 ),
               ),
@@ -263,6 +277,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   },
                 ),
                 ReportsTab(
+                  filter: _reportFilter,
                   txs: _txs,
                   accounts: _accounts,
                   onChanged: _reload,
@@ -290,8 +305,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           NavigationDestination(icon: Icon(Icons.today), label: 'اليومي'),
           NavigationDestination(icon: Icon(Icons.bar_chart), label: 'التقارير'),
           NavigationDestination(
-              icon: Icon(Icons.account_balance_wallet), label: 'الحسابات'),
-          NavigationDestination(icon: Icon(Icons.auto_awesome), label: 'الذكاء'),
+            icon: Icon(Icons.account_balance_wallet),
+            label: 'الحسابات',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.auto_awesome),
+            label: 'الذكاء',
+          ),
         ],
       ),
     );
