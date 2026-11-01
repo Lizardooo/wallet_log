@@ -16,17 +16,22 @@ int dayStartMs(String key) {
 /// Matches by wallet type, then by SIM (subscription id) when several numbers
 /// share a wallet type. Returns null when it cannot tell.
 Account? accountFor(Tx t, List<Account> accounts) {
-  final cands = accounts
-      .where((a) =>
-          a.wallet == t.wallet &&
-          (a.subId == null || t.subId == null || a.subId == t.subId))
-      .toList();
-  for (final a in cands) {
-    if (a.subId != null && a.subId == t.subId) return a;
+  final sameWallet = accounts.where((a) => a.wallet == t.wallet).toList();
+  if (sameWallet.isNotEmpty) {
+    if (t.subId != null) {
+      final exact = sameWallet.where((a) => a.subId == t.subId).toList();
+      if (exact.isNotEmpty) return exact.first;
+      // A message from a known SIM that owns no selected number of this wallet
+      // must not be attached to a number on another SIM just because that
+      // number's SIM is unknown.
+      if (sameWallet.any((a) => a.subId != null)) return null;
+      final open = sameWallet.where((a) => a.subId == null).toList();
+      return open.length == 1 ? open.first : null;
+    }
+    if (sameWallet.length == 1) return sameWallet.first;
+    final open = sameWallet.where((a) => a.subId == null).toList();
+    return open.length == 1 ? open.first : null;
   }
-  if (cands.length == 1) return cands.first;
-  final open = cands.where((a) => a.subId == null).toList();
-  if (open.length == 1) return open.first;
   // Rows imported from Excel carry the wallet number in [Tx.wallet] instead of
   // a wallet type, so link them to the account that owns that number.
   final byNumber = accounts

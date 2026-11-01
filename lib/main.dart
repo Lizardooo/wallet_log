@@ -130,7 +130,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           (s is int && s >= 0) ? s : null,
         ));
       }
-      await TxDb.importSms(raw);
+      await TxDb.importSms(raw, accounts: _accounts);
       await _reload();
       ok = true;
     } finally {

@@ -10,10 +10,11 @@ the SMS texts you choose to send to Google when you run the AI classification.
 
 Opening the app for the first time shows a short setup instead of the tabs:
 
-1. **بياناتك** - your own mobile number.
-2. **محافظك والشرائح** - every wallet number on this phone, its wallet type and
-   the **SIM slot** that receives its messages (read from the phone, or picked
-   by hand when the phone does not report it).
+1. **شرائحك ومحافظك** - the app lists the phone's SIMs with their slot, carrier
+   and number when the phone reports it. Tick each number that carries a wallet
+   and choose its wallet type(s); type the number by hand when it is not
+   detected. Only messages for the chosen wallets are stored.
+2. **بياناتك** - your own mobile number.
 3. **الذكاء الاصطناعي** - optional: paste a Gemini API key, let the app list the
    free models available to that key, and pick one.
 
@@ -67,7 +68,9 @@ pre-filled with the last balance seen in the SMS before that day.
 
 Messages are matched to a wallet number by wallet type. If one phone has two
 numbers of the same type (dual SIM), the SIM chosen during setup (or in
-**الحسابات**) decides which number a message belongs to.
+**الحسابات**) decides which number a message belongs to. When wallet numbers
+are chosen during setup, messages for wallet types that were not chosen are
+skipped.
 
 ## AI classification (Gemini)
 

@@ -70,6 +70,19 @@ class Account {
   });
 }
 
+/// Whether an SMS for [wallet] received on [subId] belongs to one of the
+/// numbers the owner chose. A message is rejected only when every selected
+/// number of this wallet has a known SIM and none matches; when the receiving
+/// SIM or an account's SIM is unknown, it is kept for that wallet type.
+bool smsBelongsToAccounts(
+    String wallet, int? subId, List<Account> accounts) {
+  final sameWallet = accounts.where((a) => a.wallet == wallet).toList();
+  if (sameWallet.isEmpty) return false;
+  if (subId == null) return true;
+  if (sameWallet.any((a) => a.subId == subId)) return true;
+  return sameWallet.any((a) => a.subId == null);
+}
+
 class RawSms {
   final String sender;
   final String body;
@@ -215,10 +228,15 @@ class TxDb {
   /// rescanning the whole inbox is safe. Rows the owner has corrected by hand
   /// (manual = 1), rows the model classified (ai = 1) and their notes are never
   /// overwritten; other rows are re-classified so improvements to the parser
-  /// apply to old messages too.
-  static Future<void> importSms(List<RawSms> msgs) async {
+  /// apply to old messages too. When [accounts] is not empty, new messages that
+  /// do not belong to one of the owner's chosen numbers are skipped; rows that
+  /// are already stored are left untouched.
+  static Future<void> importSms(List<RawSms> msgs,
+      {List<Account>? accounts}) async {
     final db = await _database;
     final batch = db.batch();
+    final chosen =
+        accounts != null && accounts.isNotEmpty ? accounts : null;
     for (final m in msgs) {
       final p = parseSms(m.sender, m.body);
       final key = smsKey(m.body, m.ts);
@@ -229,6 +247,10 @@ class TxDb {
           where: "k = ? AND manual = 0 AND ai = 0 AND note = ''",
           whereArgs: [key],
         );
+        continue;
+      }
+      if (chosen != null &&
+          !smsBelongsToAccounts(p.wallet, m.subId, chosen)) {
         continue;
       }
       final dirStr = dirString(p.dir);

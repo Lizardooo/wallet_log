@@ -7,33 +7,36 @@ import 'tabs.dart';
 
 const _green = Color(0xFF0F766E);
 
-class _Draft {
-  final TextEditingController label;
+class _SimDraft {
   final TextEditingController number;
-  String? wallet;
+  final Set<String> wallets = {};
+  bool active = false;
   int? subId;
   int? slot;
+  String carrier;
 
-  _Draft({String labelText = '', String numberText = ''})
-      : label = TextEditingController(text: labelText),
-        number = TextEditingController(text: numberText);
+  _SimDraft({
+    this.subId,
+    this.slot,
+    this.carrier = '',
+    String numberText = '',
+  }) : number = TextEditingController(text: numberText);
 
-  void dispose() {
-    label.dispose();
-    number.dispose();
-  }
+  bool get selected => active && wallets.isNotEmpty;
+
+  void dispose() => number.dispose();
 }
 
 String _shortWallet(String w) => switch (w) {
       'Vodafone Cash' => 'فودافون كاش',
       'Orange Cash' => 'أورنج كاش',
       'InstaPay' => 'إنستاباي',
-      _ => 'اتصالات كاش',
+      _ => 'اتصالات كاش / فوري',
     };
 
-/// Shown once, before the tabs: the owner enters his number and each wallet's
-/// SIM slot, then (optionally) the Gemini key so messages can be classified by
-/// a model. Finishing goes straight to the reports.
+/// Shown once, before the tabs: the owner picks the SIM numbers that carry
+/// wallets, enters his own number, then (optionally) the Gemini key so messages
+/// can be classified by a model. Finishing goes straight to the reports.
 class OnboardingPage extends StatefulWidget {
   final Future<void> Function() onDone;
 
@@ -47,7 +50,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
   final _pages = PageController();
   final _phone = TextEditingController();
   final _key = TextEditingController();
-  final _drafts = <_Draft>[_Draft()];
+  final _simDrafts = <_SimDraft>[];
   int _step = 0;
   bool _saving = false;
   bool _hideKey = true;
@@ -72,7 +75,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
     _pages.dispose();
     _phone.dispose();
     _key.dispose();
-    for (final d in _drafts) {
+    for (final d in _simDrafts) {
       d.dispose();
     }
     super.dispose();
@@ -86,41 +89,54 @@ class _OnboardingPageState extends State<OnboardingPage> {
       if (granted) {
         final raw =
             await smsChannel.invokeMethod<List<dynamic>>('simInfo') ?? const [];
-        for (final e in raw) {
-          final m = Map<String, dynamic>.from(e as Map);
+        for (var i = 0; i < raw.length; i++) {
+          final m = Map<String, dynamic>.from(raw[i] as Map);
+          final rawSlot = m['slot'] as int?;
+          final rawSub = m['subId'] as int?;
           sims.add(SimSlot(
-            subId: m['subId'] as int?,
-            slot: (m['slot'] as int?) ?? 0,
+            subId: (rawSub != null && rawSub >= 0) ? rawSub : null,
+            slot: (rawSlot == null || rawSlot < 0) ? i : rawSlot,
             carrier: (m['carrier'] as String?) ?? '',
-            number: (m['number'] as String?) ?? '',
+            number: normalizeDigits(((m['number'] as String?) ?? '').trim()),
           ));
         }
       }
     } catch (_) {
-      // The wizard still works: the owner can pick the slot by hand.
+      // The wizard still works: the owner can enter the numbers by hand.
     }
     if (!mounted) return;
     setState(() {
       _sims = sims;
       _simsLoaded = true;
-      if (sims.isNotEmpty) {
-        for (final d in _drafts) {
-          d.subId ??= sims.first.subId;
-          d.slot ??= sims.first.slot;
+      for (final d in _simDrafts) {
+        d.dispose();
+      }
+      _simDrafts.clear();
+      if (sims.isEmpty) {
+        _simDrafts.add(_SimDraft(slot: 0));
+        _simDrafts.add(_SimDraft(slot: 1));
+      } else {
+        for (final s in sims) {
+          _simDrafts.add(_SimDraft(
+            subId: s.subId,
+            slot: s.slot,
+            carrier: s.carrier,
+            numberText: s.number,
+          ));
         }
       }
     });
   }
 
-  List<SimSlot> get _slotOptions => _sims.isEmpty
-      ? const [SimSlot(slot: 0), SimSlot(slot: 1)]
-      : _sims;
-
-  String _autoName(_Draft d, String number) {
-    final w = d.wallet == null ? 'محفظة' : _shortWallet(d.wallet!);
+  String _autoName(String wallet, _SimDraft d, String number) {
+    final w = _shortWallet(wallet);
     if (number.isNotEmpty) return '$w · $number';
     if (d.slot != null) return '$w · شريحة ${d.slot! + 1}';
     return w;
+  }
+
+  void _addManualNumber() {
+    setState(() => _simDrafts.add(_SimDraft()));
   }
 
   Future<void> _fetchModels() async {
@@ -158,19 +174,19 @@ class _OnboardingPageState extends State<OnboardingPage> {
         if (phone.isNotEmpty) {
           await TxDb.setSetting(TxDb.settingsOwnerPhone, phone);
         }
-        for (final d in _drafts) {
-          final wallet = d.wallet;
-          if (wallet == null) continue;
+        for (final d in _simDrafts) {
+          if (!d.selected) continue;
           final number = normalizeDigits(d.number.text.trim());
-          if (number.isEmpty && _drafts.length > 1) continue;
-          final label = d.label.text.trim();
-          await TxDb.saveAccount(Account(
-            name: label.isEmpty ? _autoName(d, number) : label,
-            wallet: wallet,
-            number: number,
-            subId: d.subId,
-            slot: d.slot,
-          ));
+          if (number.isEmpty && d.subId == null) continue;
+          for (final wallet in d.wallets) {
+            await TxDb.saveAccount(Account(
+              name: _autoName(wallet, d, number),
+              wallet: wallet,
+              number: number,
+              subId: d.subId,
+              slot: d.slot,
+            ));
+          }
         }
         final key = _key.text.trim();
         if (key.isNotEmpty) {
@@ -189,11 +205,29 @@ class _OnboardingPageState extends State<OnboardingPage> {
   }
 
   void _next() {
-    if (_step == 1 && !_drafts.any((d) => d.wallet != null)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('اختر محفظة واحدة على الأقل، أو اضغط "تخطي" من الأعلى.'),
-      ));
-      return;
+    if (_step == 0) {
+      final chosen = _simDrafts.where((d) => d.active).toList();
+      if (chosen.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'اختر رقم واحد على الأقل عليه محفظة، أو اضغط "تخطي" من الأعلى.'),
+        ));
+        return;
+      }
+      if (chosen.any((d) => d.wallets.isEmpty)) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('اختر نوع المحفظة لكل رقم اخترته.'),
+        ));
+        return;
+      }
+      final missing = chosen.any((d) =>
+          normalizeDigits(d.number.text.trim()).isEmpty && d.subId == null);
+      if (missing) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('اكتب رقم المحفظة للرقم اللي اخترته.'),
+        ));
+        return;
+      }
     }
     setState(() => _step++);
     _pages.animateToPage(_step,
@@ -210,8 +244,8 @@ class _OnboardingPageState extends State<OnboardingPage> {
   @override
   Widget build(BuildContext context) {
     final title = switch (_step) {
-      0 => 'بياناتك',
-      1 => 'محافظك والشرائح',
+      0 => 'شرائحك ومحافظك',
+      1 => 'بياناتك',
       _ => 'الذكاء الاصطناعي',
     };
     return Scaffold(
@@ -277,6 +311,180 @@ class _OnboardingPageState extends State<OnboardingPage> {
 
   Widget _step0() {
     return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text(
+          'اختر الأرقام اللي عليها محافظ أو محافظ إلكترونية. هنقرأ رسايل '
+          'المحافظ من الشرائح المختارة ونحسب معاملاتها. لو الرقم مش ظاهر، '
+          'اكتبه يدوياً.',
+          style: TextStyle(fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        if (!_simsLoaded)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: LinearProgressIndicator(),
+          )
+        else if (_sims.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'لم نقدر نقرأ شرائح الهاتف تلقائياً. اكتب رقم كل شريحة ومحفظتها '
+              'يدوياً.',
+              style: TextStyle(fontSize: 12, color: Colors.orange),
+            ),
+          )
+        else
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 4, 4, 0),
+            child: Text('الشرائح المكتشفة:', style: TextStyle(fontSize: 12)),
+          ),
+        for (var i = 0; i < _simDrafts.length; i++) _simCard(i),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _simsLoaded ? _addManualNumber : null,
+          icon: const Icon(Icons.add),
+          label: const Text('إضافة رقم آخر'),
+        ),
+      ],
+    );
+  }
+
+  Widget _simCard(int index) {
+    final d = _simDrafts[index];
+    final title = d.slot == null ? 'رقم إضافي' : 'شريحة ${d.slot! + 1}';
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.sim_card_outlined),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          style: const TextStyle(fontWeight: FontWeight.bold)),
+                      if (d.carrier.isNotEmpty)
+                        Text(d.carrier, style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
+                if (_simDrafts.length > 1)
+                  IconButton(
+                    tooltip: 'حذف',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () {
+                      final removed = _simDrafts[index];
+                      setState(() => _simDrafts.removeAt(index));
+                      WidgetsBinding.instance
+                          .addPostFrameCallback((_) => removed.dispose());
+                    },
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: d.number,
+              keyboardType: TextInputType.phone,
+              textDirection: TextDirection.ltr,
+              decoration: InputDecoration(
+                labelText: 'رقم الشريحة / المحفظة',
+                hintText: '01xxxxxxxxx',
+                helperText: d.subId == null
+                    ? 'اكتب الرقم يدوياً'
+                    : 'اتركه فارغاً لو الرقم مش معروف',
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            if (d.subId == null) ...[
+              const SizedBox(height: 6),
+              const Text('الشريحة (SIM slot)', style: TextStyle(fontSize: 12)),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  for (var s = 0; s < 2; s++)
+                    ChoiceChip(
+                      label: Text('شريحة ${s + 1}'),
+                      selected: d.slot == s,
+                      onSelected: (_) => setState(() => d.slot = s),
+                    ),
+                  ChoiceChip(
+                    label: const Text('غير محدد'),
+                    selected: d.slot == null,
+                    onSelected: (_) => setState(() => d.slot = null),
+                  ),
+                ],
+              ),
+            ],
+            InkWell(
+              onTap: () => setState(() => d.active = !d.active),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      d.active
+                          ? Icons.check_box
+                          : Icons.check_box_outline_blank,
+                      color: d.active
+                          ? Theme.of(context).colorScheme.primary
+                          : null,
+                    ),
+                    const SizedBox(width: 4),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('الرقم عليه محفظة / محفظة إلكترونية'),
+                          SizedBox(height: 2),
+                          Text(
+                            'اختر نوع المحفظة أو أكثر اللي بتستقبل رسايلها '
+                            'على الرقم ده',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (d.active)
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  for (final w in walletTypes)
+                    FilterChip(
+                      label: Text(_shortWallet(w)),
+                      selected: d.wallets.contains(w),
+                      onSelected: (on) => setState(() {
+                        if (on) {
+                          d.wallets.add(w);
+                        } else {
+                          d.wallets.remove(w);
+                        }
+                      }),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _step1() {
+    return ListView(
       padding: const EdgeInsets.all(20),
       children: [
         Center(
@@ -290,14 +498,15 @@ class _OnboardingPageState extends State<OnboardingPage> {
         ),
         const SizedBox(height: 8),
         const Text(
-          'إعداد مرة واحدة فقط: رقمك، والمحافظ اللي عندك، والشريحة اللي بتستقبل '
-          'رسايل كل محفظة. بعد كده التطبيق يقرأ الرسائل ويجهز التقارير.',
+          'رقمك المسجل عليه المحافظ. الإعداد مرة واحدة فقط: بعد كده التطبيق '
+          'يقرأ رسائل الأرقام اللي اخترتها ويجهز التقارير.',
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 24),
         TextField(
           controller: _phone,
           keyboardType: TextInputType.phone,
+          textDirection: TextDirection.ltr,
           decoration: const InputDecoration(
             labelText: 'رقم موبايلك',
             helperText: 'الرقم المسجل عليه المحافظ (11 رقم)',
@@ -325,137 +534,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _step1() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const Text(
-          'سجّل كل رقم محفظة على هذا الهاتف، وحدد نوع المحفظة والشريحة (SIM) '
-          'اللي بتستقبل رسايلها. لو عندك رقمين من نفس المحفظة، كل واحد له شريحة.',
-          style: TextStyle(fontSize: 13),
-        ),
-        const SizedBox(height: 4),
-        if (!_simsLoaded)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: LinearProgressIndicator(),
-          )
-        else if (_sims.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Text(
-              'لم يتم قراءة شرائح الهاتف تلقائياً (محتاج إذن الهاتف). اختر '
-              '"شريحة 1" أو "شريحة 2" يدوياً، أو "غير محدد".',
-              style: TextStyle(fontSize: 12, color: Colors.orange),
-            ),
-          ),
-        for (var i = 0; i < _drafts.length; i++) _walletCard(i),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: () {
-            final firstNumber = _drafts.isEmpty
-                ? _phone.text.trim()
-                : _drafts.first.number.text.trim();
-            setState(() => _drafts.add(_Draft(numberText: firstNumber)));
-          },
-          icon: const Icon(Icons.add),
-          label: const Text('إضافة محفظة أخرى'),
-        ),
-      ],
-    );
-  }
-
-  Widget _walletCard(int index) {
-    final d = _drafts[index];
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text('محفظة ${index + 1}',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                const Spacer(),
-                if (_drafts.length > 1)
-                  IconButton(
-                    tooltip: 'حذف',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () {
-                      setState(() {
-                        _drafts.removeAt(index).dispose();
-                      });
-                    },
-                  ),
-              ],
-            ),
-            const Text('نوع المحفظة', style: TextStyle(fontSize: 12)),
-            Wrap(
-              spacing: 6,
-              runSpacing: 4,
-              children: [
-                for (final w in walletTypes)
-                  ChoiceChip(
-                    label: Text(w),
-                    selected: d.wallet == w,
-                    onSelected: (_) => setState(() => d.wallet = w),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: d.number,
-              keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(
-                labelText: 'رقم المحفظة',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 4),
-            TextField(
-              controller: d.label,
-              decoration: const InputDecoration(
-                labelText: 'اسم مختصر (اختياري)',
-                hintText: 'مثال: فودافون الأساسي',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text('الشريحة (SIM slot)',
-                style: TextStyle(fontSize: 12)),
-            Wrap(
-              spacing: 6,
-              runSpacing: 4,
-              children: [
-                for (final s in _slotOptions)
-                  ChoiceChip(
-                    label: Text(s.label),
-                    selected: d.subId == s.subId && d.slot == s.slot,
-                    onSelected: (_) => setState(() {
-                      d.subId = s.subId;
-                      d.slot = s.slot;
-                    }),
-                  ),
-                ChoiceChip(
-                  label: const Text('غير محدد'),
-                  selected: d.subId == null && d.slot == null,
-                  onSelected: (_) => setState(() {
-                    d.subId = null;
-                    d.slot = null;
-                  }),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 

@@ -14,6 +14,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val channelName = "wallet_log/sms"
     private var pending: MethodChannel.Result? = null
+    private var pendingSim = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -26,8 +27,7 @@ class MainActivity : FlutterActivity() {
                         if (Build.VERSION.SDK_INT < 33) result.success(true)
                         else requestPerm("android.permission.POST_NOTIFICATIONS", result)
                     "readInbox" -> readInbox(result)
-                    "requestPhoneState" ->
-                        requestPerm(Manifest.permission.READ_PHONE_STATE, result)
+                    "requestPhoneState" -> requestSimPermissions(result)
                     "simInfo" -> result.success(simInfo())
                     "scheduleDaily" -> {
                         val h = call.argument<Int>("hour") ?: 9
@@ -55,12 +55,36 @@ class MainActivity : FlutterActivity() {
         checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
 
     private fun requestPerm(perm: String, result: MethodChannel.Result) {
-        if (hasPerm(perm)) {
+        requestPerms(arrayOf(perm), result, sim = false)
+    }
+
+    /**
+     * The setup needs the subscription list (READ_PHONE_STATE) and, when the
+     * carrier exposes it, the SIM's own number (READ_PHONE_NUMBERS). The number
+     * is optional: the list is still useful without it, so success follows the
+     * phone-state permission only.
+     */
+    private fun requestSimPermissions(result: MethodChannel.Result) {
+        val perms = mutableListOf(Manifest.permission.READ_PHONE_STATE)
+        if (Build.VERSION.SDK_INT >= 26) {
+            perms.add(Manifest.permission.READ_PHONE_NUMBERS)
+        }
+        requestPerms(perms.toTypedArray(), result, sim = true)
+    }
+
+    private fun requestPerms(
+        perms: Array<String>,
+        result: MethodChannel.Result,
+        sim: Boolean
+    ) {
+        val missing = perms.filter { !hasPerm(it) }
+        if (missing.isEmpty()) {
             result.success(true)
             return
         }
         pending = result
-        requestPermissions(arrayOf(perm), 77)
+        pendingSim = sim
+        requestPermissions(missing.toTypedArray(), 77)
     }
 
     override fun onRequestPermissionsResult(
@@ -70,10 +94,18 @@ class MainActivity : FlutterActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 77) {
-            pending?.success(
-                grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
-            )
+            val result = pending
+            val sim = pendingSim
             pending = null
+            pendingSim = false
+            result?.success(
+                if (sim) {
+                    hasPerm(Manifest.permission.READ_PHONE_STATE)
+                } else {
+                    grantResults.isNotEmpty() &&
+                        grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+                }
+            )
         }
     }
 
@@ -90,15 +122,16 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             null
         } ?: return emptyList()
-        return subs.map { s ->
+        return subs.mapIndexed { index, s ->
             val number = try {
-                if (hasPerm(Manifest.permission.READ_PHONE_NUMBERS)) s.number else null
+                val n = s.number
+                if (n.isNullOrBlank()) null else n
             } catch (e: Exception) {
                 null
             }
             mapOf(
                 "subId" to s.subscriptionId,
-                "slot" to s.simSlotIndex,
+                "slot" to if (s.simSlotIndex >= 0) s.simSlotIndex else index,
                 "carrier" to (s.carrierName?.toString() ?: ""),
                 "number" to number
             )
