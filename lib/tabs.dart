@@ -73,7 +73,10 @@ Widget statLine(String label, String value, Color? color, {bool bold = false}) {
     padding: const EdgeInsets.symmetric(vertical: 2),
     child: Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [Text(label, style: style), Text(value, style: style)],
+      children: [
+        Text(label, style: style),
+        Text(value, style: style),
+      ],
     ),
   );
 }
@@ -153,8 +156,10 @@ Future<TxEdit?> showTxDialog(BuildContext context, Tx t, double? mismatch) {
                   style: const TextStyle(color: _green, fontSize: 12),
                 ),
               const SizedBox(height: 8),
-              const Text('نص الرسالة',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
+              const Text(
+                'نص الرسالة',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(8),
@@ -214,7 +219,9 @@ Future<TxEdit?> showTxDialog(BuildContext context, Tx t, double? mismatch) {
           if (t.review)
             OutlinedButton(
               onPressed: () => Navigator.pop(
-                  ctx, TxEdit(c.text.trim(), t.type, t.dir, false)),
+                ctx,
+                TxEdit(c.text.trim(), t.type, t.dir, false),
+              ),
               child: const Text('حفظ الملاحظة فقط'),
             ),
           FilledButton(
@@ -261,8 +268,9 @@ Future<Map<int, double>?> showOpeningDialog(
               const SizedBox(height: 12),
               TextField(
                 controller: controllers[a.id!],
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: InputDecoration(
                   labelText: accountLabel(a),
                   border: const OutlineInputBorder(),
@@ -295,7 +303,10 @@ Future<Map<int, double>?> showOpeningDialog(
 }
 
 Future<Account?> editAccount(
-    BuildContext context, Account? existing, List<Tx> txs) {
+  BuildContext context,
+  Account? existing,
+  List<Tx> txs,
+) {
   final name = TextEditingController(text: existing?.name ?? '');
   final number = TextEditingController(text: existing?.number ?? '');
   String wallet = existing?.wallet ?? walletTypes.first;
@@ -415,6 +426,7 @@ class TransactionsTab extends StatefulWidget {
   final VoidCallback onChanged;
   final void Function(Tx) onTap;
   final Future<void> Function() onRefresh;
+  final DateTime Function()? now;
 
   const TransactionsTab({
     super.key,
@@ -425,6 +437,7 @@ class TransactionsTab extends StatefulWidget {
     required this.onChanged,
     required this.onTap,
     required this.onRefresh,
+    this.now,
   });
 
   @override
@@ -432,9 +445,6 @@ class TransactionsTab extends StatefulWidget {
 }
 
 class _TransactionsTabState extends State<TransactionsTab> {
-  Dir? _dir; // null = all, inFlow = incoming only, outFlow = outgoing only
-  bool _review = false;
-
   TxFilter get _f => widget.filter;
 
   void _apply(VoidCallback change) {
@@ -443,35 +453,32 @@ class _TransactionsTabState extends State<TransactionsTab> {
     if (mounted) setState(() {});
   }
 
-  static DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
-
-  bool _isRange(DateTime from, DateTime to) {
-    final f = _f.from;
-    final t = _f.to;
-    return f != null && t != null && _day(f) == _day(from) && _day(t) == _day(to);
-  }
+  DateTime get _now => widget.now?.call() ?? DateTime.now();
 
   int get _activeFilters =>
       (_f.accountId != null ? 1 : 0) +
       (_f.types.isNotEmpty ? 1 : 0) +
-      ((_f.from != null || _f.to != null) ? 1 : 0);
+      (_f.date.period != DatePeriod.all ? 1 : 0) +
+      (_f.dir != null ? 1 : 0);
 
   Future<void> _pickRange() async {
-    final now = DateTime.now();
-    final f = _f.from;
-    final e = _f.to;
+    final now = _now;
+    final bounds = _f.date.bounds(now: now);
+    final start = bounds.start;
+    final end = bounds.end;
     final r = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2020),
-      lastDate: _day(now),
-      initialDateRange:
-          (f != null && e != null) ? DateTimeRange(start: f, end: e) : null,
+      lastDate: DateTime(now.year, now.month, now.day),
+      initialDateRange: start == null || end == null
+          ? null
+          : DateTimeRange(
+              start: start,
+              end: DateTime(end.year, end.month, end.day - 1),
+            ),
     );
     if (r != null) {
-      _apply(() {
-        _f.from = r.start;
-        _f.to = r.end;
-      });
+      _apply(() => _f.date.setCustom(r.start, r.end));
     }
   }
 
@@ -487,26 +494,19 @@ class _TransactionsTabState extends State<TransactionsTab> {
             setSheet(() {});
           }
 
-          final now = DateTime.now();
-          final today = _day(now);
-          final yesterday = DateTime(today.year, today.month, today.day - 1);
-          final week = DateTime(today.year, today.month, today.day - 6);
-          final month = DateTime(now.year, now.month);
-          final noRange = _f.from == null && _f.to == null;
-          final custom = !noRange &&
-              !_isRange(today, today) &&
-              !_isRange(yesterday, yesterday) &&
-              !_isRange(week, today) &&
-              !_isRange(month, today);
+          final period = _f.date.period;
+          final custom = period == DatePeriod.custom;
           final presentTypes = TxType.values
               .where((ty) => widget.txs.any((t) => t.type == ty))
               .toList();
 
           Widget title(String s) => Padding(
                 padding: const EdgeInsets.only(top: 14, bottom: 6),
-                child: Text(s,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 13)),
+                child: Text(
+                  s,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 13),
+                ),
               );
 
           return SafeArea(
@@ -519,18 +519,17 @@ class _TransactionsTabState extends State<TransactionsTab> {
                   Row(
                     children: [
                       const Expanded(
-                        child: Text('تصفية المعاملات',
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 16)),
+                        child: Text(
+                          'تصفية المعاملات',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
                       ),
                       if (_activeFilters > 0)
                         TextButton(
-                          onPressed: () => change(() {
-                            _f.accountId = null;
-                            _f.types.clear();
-                            _f.from = null;
-                            _f.to = null;
-                          }),
+                          onPressed: () => change(_f.clear),
                           child: const Text('مسح الكل'),
                         ),
                     ],
@@ -563,49 +562,41 @@ class _TransactionsTabState extends State<TransactionsTab> {
                     children: [
                       ChoiceChip(
                         label: const Text('الكل'),
-                        selected: noRange,
-                        onSelected: (_) => change(() {
-                          _f.from = null;
-                          _f.to = null;
-                        }),
+                        selected: period == DatePeriod.all,
+                        onSelected: (_) =>
+                            change(() => _f.date.select(DatePeriod.all)),
                       ),
                       ChoiceChip(
                         label: const Text('اليوم'),
-                        selected: _isRange(today, today),
-                        onSelected: (_) => change(() {
-                          _f.from = today;
-                          _f.to = today;
-                        }),
+                        selected: period == DatePeriod.today,
+                        onSelected: (_) =>
+                            change(() => _f.date.select(DatePeriod.today)),
                       ),
                       ChoiceChip(
                         label: const Text('أمس'),
-                        selected: _isRange(yesterday, yesterday),
-                        onSelected: (_) => change(() {
-                          _f.from = yesterday;
-                          _f.to = yesterday;
-                        }),
+                        selected: period == DatePeriod.yesterday,
+                        onSelected: (_) =>
+                            change(() => _f.date.select(DatePeriod.yesterday)),
                       ),
                       ChoiceChip(
                         label: const Text('7 أيام'),
-                        selected: _isRange(week, today),
-                        onSelected: (_) => change(() {
-                          _f.from = week;
-                          _f.to = today;
-                        }),
+                        selected: period == DatePeriod.last7Days,
+                        onSelected: (_) =>
+                            change(() => _f.date.select(DatePeriod.last7Days)),
                       ),
                       ChoiceChip(
                         label: const Text('هذا الشهر'),
-                        selected: _isRange(month, today),
-                        onSelected: (_) => change(() {
-                          _f.from = month;
-                          _f.to = today;
-                        }),
+                        selected: period == DatePeriod.thisMonth,
+                        onSelected: (_) =>
+                            change(() => _f.date.select(DatePeriod.thisMonth)),
                       ),
                       ChoiceChip(
                         avatar: const Icon(Icons.edit_calendar, size: 16),
-                        label: Text(custom
-                            ? '${_f.from != null ? dayKey(_f.from!) : '...'} – ${_f.to != null ? dayKey(_f.to!) : '...'}'
-                            : 'نطاق محدد'),
+                        label: Text(
+                          custom
+                              ? '${dayKey(_f.date.from!)} – ${dayKey(_f.date.to!)}'
+                              : 'نطاق محدد',
+                        ),
                         selected: custom,
                         onSelected: (_) async {
                           await _pickRange();
@@ -660,16 +651,15 @@ class _TransactionsTabState extends State<TransactionsTab> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final matched =
-        widget.txs.where((t) => _f.matches(t, widget.accounts)).toList();
+    final now = _now;
+    final matched = widget.txs
+        .where((t) => _f.matchesBase(t, widget.accounts, now: now))
+        .toList();
     final reviewList = matched.where(_needsReview).toList();
-    final confirmed = matched.where((t) => !_needsReview(t)).toList();
-    final shown = _dir == null
-        ? confirmed
-        : confirmed.where((t) => t.dir == _dir).toList();
-    final totals = totalsOf(confirmed);
-
-    final list = _review ? reviewList : shown;
+    final list = widget.txs
+        .where((t) => _f.matches(t, widget.accounts, now: now))
+        .toList();
+    final totals = totalsOf(list);
     final groups = <String, List<Tx>>{};
     for (final t in list) {
       groups.putIfAbsent(dayKeyTs(t.ts), () => []).add(t);
@@ -681,18 +671,22 @@ class _TransactionsTabState extends State<TransactionsTab> {
 
     final toolbar = Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: _review
+      child: _f.reviewOnly
           ? Row(
               children: [
                 IconButton(
                   tooltip: 'رجوع',
-                  onPressed: () => setState(() => _review = false),
+                  onPressed: () => setState(() => _f.reviewOnly = false),
                   icon: const Icon(Icons.arrow_back),
                 ),
                 Expanded(
-                  child: Text('تحتاج مراجعة (${reviewList.length})',
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 16)),
+                  child: Text(
+                    'تحتاج مراجعة (${reviewList.length})',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
                 ),
               ],
             )
@@ -710,13 +704,12 @@ class _TransactionsTabState extends State<TransactionsTab> {
                       ButtonSegment(value: 2, label: Text('خارج')),
                     ],
                     selected: {
-                      _dir == null ? 0 : (_dir == Dir.inFlow ? 1 : 2),
+                      _f.dir == null ? 0 : (_f.dir == Dir.inFlow ? 1 : 2),
                     },
                     onSelectionChanged: (s) => setState(() {
                       final v = s.first;
-                      _dir = v == 0
-                          ? null
-                          : (v == 1 ? Dir.inFlow : Dir.outFlow);
+                      _f.dir =
+                          v == 0 ? null : (v == 1 ? Dir.inFlow : Dir.outFlow);
                     }),
                   ),
                 ),
@@ -733,7 +726,7 @@ class _TransactionsTabState extends State<TransactionsTab> {
                 if (reviewList.isNotEmpty)
                   IconButton.filledTonal(
                     tooltip: 'تحتاج مراجعة',
-                    onPressed: () => setState(() => _review = true),
+                    onPressed: () => setState(() => _f.reviewOnly = true),
                     icon: Badge(
                       label: Text('${reviewList.length}'),
                       child: const Icon(Icons.rule),
@@ -746,22 +739,27 @@ class _TransactionsTabState extends State<TransactionsTab> {
     Widget summaryCell(String label, String value, Color color) => Expanded(
           child: Column(
             children: [
-              Text(label,
-                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+              Text(
+                label,
+                style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+              ),
               const SizedBox(height: 2),
               FittedBox(
                 fit: BoxFit.scaleDown,
-                child: Text(value,
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: color)),
+                child: Text(
+                  value,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: color,
+                  ),
+                ),
               ),
             ],
           ),
         );
 
-    final summary = _review
+    final summary = _f.reviewOnly
         ? Container(
             width: double.infinity,
             margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
@@ -788,8 +786,11 @@ class _TransactionsTabState extends State<TransactionsTab> {
               children: [
                 summaryCell('داخل', fmt(totals.inSum), _green),
                 summaryCell('خارج', fmt(totals.outSum), _red),
-                summaryCell('الصافي', fmt(totals.net),
-                    totals.net < 0 ? _red : cs.onSurface),
+                summaryCell(
+                  'الصافي',
+                  fmt(totals.net),
+                  totals.net < 0 ? _red : cs.onSurface,
+                ),
               ],
             ),
           );
@@ -807,14 +808,18 @@ class _TransactionsTabState extends State<TransactionsTab> {
                     children: [
                       const SizedBox(height: 80),
                       Icon(
-                        _review ? Icons.verified_outlined : Icons.inbox_outlined,
+                        _f.reviewOnly
+                            ? Icons.verified_outlined
+                            : Icons.inbox_outlined,
                         size: 56,
                         color: cs.outline,
                       ),
                       const SizedBox(height: 8),
                       Center(
                         child: Text(
-                          _review ? 'لا توجد معاملات تحتاج مراجعة' : 'لا توجد معاملات',
+                          _f.reviewOnly
+                              ? 'لا توجد معاملات تحتاج مراجعة ضمن الفلاتر'
+                              : 'لا توجد معاملات مؤكدة مطابقة للفلاتر',
                           style: TextStyle(color: cs.onSurfaceVariant),
                         ),
                       ),
@@ -869,18 +874,25 @@ class _TransactionsTabState extends State<TransactionsTab> {
             child: Text(
               dayTitle(h.day),
               style: TextStyle(
-                  fontWeight: FontWeight.w600, fontSize: 12, color: grey),
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+                color: grey,
+              ),
             ),
           ),
-          if (!_review) ...[
+          if (!_f.reviewOnly) ...[
             if (h.totals.inSum > 0)
-              Text('+${fmt(h.totals.inSum)}',
-                  style: const TextStyle(color: _green, fontSize: 12)),
+              Text(
+                '+${fmt(h.totals.inSum)}',
+                style: const TextStyle(color: _green, fontSize: 12),
+              ),
             if (h.totals.inSum > 0 && h.totals.outSum > 0)
               const SizedBox(width: 10),
             if (h.totals.outSum > 0)
-              Text('-${fmt(h.totals.outSum)}',
-                  style: const TextStyle(color: _red, fontSize: 12)),
+              Text(
+                '-${fmt(h.totals.outSum)}',
+                style: const TextStyle(color: _red, fontSize: 12),
+              ),
           ],
         ],
       ),
@@ -928,7 +940,9 @@ class _TransactionsTabState extends State<TransactionsTab> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 14),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
                   ),
                   Text(sub, style: small),
                   if (t.note.isNotEmpty)
@@ -936,14 +950,19 @@ class _TransactionsTabState extends State<TransactionsTab> {
                       padding: const EdgeInsets.only(top: 2),
                       child: Row(
                         children: [
-                          Icon(Icons.sticky_note_2_outlined,
-                              size: 12, color: cs.onSurfaceVariant),
+                          Icon(
+                            Icons.sticky_note_2_outlined,
+                            size: 12,
+                            color: cs.onSurfaceVariant,
+                          ),
                           const SizedBox(width: 4),
                           Expanded(
-                            child: Text(t.note,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: small),
+                            child: Text(
+                              t.note,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: small,
+                            ),
                           ),
                         ],
                       ),
@@ -963,8 +982,10 @@ class _TransactionsTabState extends State<TransactionsTab> {
                   if (mm != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: Text('⚠ الرصيد لا يطابق (فرق ${fmt(mm)})',
-                          style: const TextStyle(fontSize: 11, color: _orange)),
+                      child: Text(
+                        '⚠ الرصيد لا يطابق (فرق ${fmt(mm)})',
+                        style: const TextStyle(fontSize: 11, color: _orange),
+                      ),
                     ),
                 ],
               ),
@@ -976,7 +997,10 @@ class _TransactionsTabState extends State<TransactionsTab> {
                 Text(
                   '$sign${fmt(t.amount)}',
                   style: TextStyle(
-                      color: color, fontWeight: FontWeight.bold, fontSize: 15),
+                    color: color,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
                 ),
                 if (t.fee > 0 && !pending)
                   Text('رسوم ${fmt(t.fee)}', style: small),
@@ -1020,7 +1044,11 @@ class _DailyTabState extends State<DailyTab> {
   }
 
   Future<void> _edit(DayRow r, String key) async {
-    final v = await askAmount(context, 'رصيد بداية اليوم\n${r.label}', r.opening);
+    final v = await askAmount(
+      context,
+      'رصيد بداية اليوم\n${r.label}',
+      r.opening,
+    );
     if (v != null) await widget.onSetOpening(r.account!.id!, key, v);
   }
 
@@ -1087,8 +1115,12 @@ class _DailyTabState extends State<DailyTab> {
                 statLine('إجمالي الداخل', fmt(totalIn), _green),
                 statLine('إجمالي الخارج', fmt(totalOut), _red),
                 statLine('إجمالي الرسوم', fmt(totalFee), null),
-                statLine('إجمالي المتبقي المتوقع', fmt(totalLeft), null,
-                    bold: true),
+                statLine(
+                  'إجمالي المتبقي المتوقع',
+                  fmt(totalLeft),
+                  null,
+                  bold: true,
+                ),
                 if (missing > 0)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
@@ -1183,12 +1215,16 @@ class ReportsTab extends StatefulWidget {
   final List<Tx> txs;
   final List<Account> accounts;
   final Future<void> Function() onChanged;
+  final TxFilter filter;
+  final DateTime Function()? now;
 
   const ReportsTab({
     super.key,
     required this.txs,
     required this.accounts,
     required this.onChanged,
+    required this.filter,
+    this.now,
   });
 
   @override
@@ -1196,71 +1232,36 @@ class ReportsTab extends StatefulWidget {
 }
 
 class _ReportsTabState extends State<ReportsTab> {
-  int _period = 3;
-  int? _accountId;
-  DateTimeRange? _custom;
-  static const _labels = ['اليوم', '7 أيام', '30 يوم', 'هذا الشهر', 'الكل'];
-  static const _never = 253402300799000; // year 9999
+  TxFilter get _f => widget.filter;
+  DateTime get _now => widget.now?.call() ?? DateTime.now();
+  static const _periods = {
+    DatePeriod.today: 'اليوم',
+    DatePeriod.last7Days: '7 أيام',
+    DatePeriod.last30Days: '30 يوم',
+    DatePeriod.thisMonth: 'هذا الشهر',
+    DatePeriod.all: 'الكل',
+  };
 
   Account? _selectedAccount() {
-    if (_accountId == null) return null;
     for (final a in widget.accounts) {
-      if (a.id == _accountId) return a;
+      if (a.id == _f.accountId) return a;
     }
     return null;
   }
 
-  int _from() {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    switch (_period) {
-      case 0:
-        return today.millisecondsSinceEpoch;
-      case 1:
-        return DateTime(today.year, today.month, today.day - 6)
-            .millisecondsSinceEpoch;
-      case 2:
-        return DateTime(today.year, today.month, today.day - 29)
-            .millisecondsSinceEpoch;
-      case 3:
-        return DateTime(now.year, now.month).millisecondsSinceEpoch;
-      case 5:
-        final c = _custom;
-        return c == null ? 0 : c.start.millisecondsSinceEpoch;
-      default:
-        return 0;
-    }
-  }
-
-  int _to() {
-    final c = _custom;
-    if (_period == 5 && c != null) {
-      return DateTime(c.end.year, c.end.month, c.end.day + 1)
-          .millisecondsSinceEpoch;
-    }
-    return _never;
-  }
-
   Future<void> _pickCustom() async {
-    final now = DateTime.now();
+    final now = _now;
     final r = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2020),
       lastDate: DateTime(now.year, now.month, now.day),
-      initialDateRange: _custom,
+      initialDateRange: _f.date.from == null || _f.date.to == null
+          ? null
+          : DateTimeRange(start: _f.date.from!, end: _f.date.to!),
     );
     if (r != null) {
-      setState(() {
-        _custom = r;
-        _period = 5;
-      });
+      setState(() => _f.date.setCustom(r.start, r.end));
     }
-  }
-
-  void _snack(String text) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _importExcel() => importExcelReport(
@@ -1271,22 +1272,18 @@ class _ReportsTabState extends State<ReportsTab> {
 
   @override
   Widget build(BuildContext context) {
-    final from = _from();
-    final to = _to();
-    final periodTxs =
-        widget.txs.where((t) => t.ts >= from && t.ts < to).toList();
+    final now = _now;
+    final txs = widget.txs
+        .where((t) => _f.matchesBase(t, widget.accounts, now: now))
+        .toList();
     final account = _selectedAccount();
-    final txs = account == null
-        ? periodTxs
-        : periodTxs
-            .where((t) => accountFor(t, widget.accounts)?.id == account.id)
-            .toList();
     final all = totalsOf(txs);
-    final stats =
-        accountStats(txs, account == null ? widget.accounts : [account]);
+    final stats = accountStats(
+      txs,
+      account == null ? widget.accounts : [account],
+    );
     final types = typeStats(txs);
     final parties = partyStats(txs);
-    final c = _custom;
 
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -1294,18 +1291,20 @@ class _ReportsTabState extends State<ReportsTab> {
         Wrap(
           spacing: 6,
           children: [
-            for (var i = 0; i < _labels.length; i++)
+            for (final entry in _periods.entries)
               ChoiceChip(
-                label: Text(_labels[i]),
-                selected: _period == i,
-                onSelected: (_) => setState(() => _period = i),
+                label: Text(entry.value),
+                selected: _f.date.period == entry.key,
+                onSelected: (_) => setState(() => _f.date.select(entry.key)),
               ),
             ChoiceChip(
               avatar: const Icon(Icons.edit_calendar, size: 16),
-              label: Text(c == null
-                  ? 'نطاق محدد'
-                  : '${dayKey(c.start)} – ${dayKey(c.end)}'),
-              selected: _period == 5,
+              label: Text(
+                _f.date.period != DatePeriod.custom
+                    ? 'نطاق محدد'
+                    : '${dayKey(_f.date.from!)} – ${dayKey(_f.date.to!)}',
+              ),
+              selected: _f.date.period == DatePeriod.custom,
               onSelected: (_) => _pickCustom(),
             ),
           ],
@@ -1321,14 +1320,14 @@ class _ReportsTabState extends State<ReportsTab> {
               ChoiceChip(
                 label: const Text('كل المحافظ'),
                 selected: account == null,
-                onSelected: (_) => setState(() => _accountId = null),
+                onSelected: (_) => setState(() => _f.accountId = null),
               ),
               for (final a in widget.accounts)
                 if (a.id != null)
                   ChoiceChip(
                     label: Text(accountLabel(a)),
                     selected: account?.id == a.id,
-                    onSelected: (_) => setState(() => _accountId = a.id),
+                    onSelected: (_) => setState(() => _f.accountId = a.id),
                   ),
             ],
           ),
@@ -1364,8 +1363,10 @@ class _ReportsTabState extends State<ReportsTab> {
         ),
         const Padding(
           padding: EdgeInsets.fromLTRB(4, 12, 4, 4),
-          child: Text('حسب نوع العملية',
-              style: TextStyle(fontWeight: FontWeight.bold)),
+          child: Text(
+            'حسب نوع العملية',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
         ),
         for (final e in types)
           Card(
@@ -1378,14 +1379,17 @@ class _ReportsTabState extends State<ReportsTab> {
                     children: [
                       Icon(typeIcon(e.key), size: 18),
                       const SizedBox(width: 6),
-                      Text(e.key.label,
-                          style: const TextStyle(fontWeight: FontWeight.bold)),
+                      Text(
+                        e.key.label,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ],
                   ),
                   statLine('عدد المعاملات', '${e.value.count}', null),
                   statLine('الداخل', fmt(e.value.inSum), _green),
                   statLine('الخارج', fmt(e.value.outSum), _red),
-                  if (e.value.fee > 0) statLine('الرسوم', fmt(e.value.fee), null),
+                  if (e.value.fee > 0)
+                    statLine('الرسوم', fmt(e.value.fee), null),
                   if (e.value.pending > 0)
                     Text(
                       'تحتاج مراجعة: ${e.value.pending} (${fmt(e.value.pendingSum)} غير محسوبة)',
@@ -1397,8 +1401,10 @@ class _ReportsTabState extends State<ReportsTab> {
           ),
         const Padding(
           padding: EdgeInsets.fromLTRB(4, 12, 4, 4),
-          child: Text('حسب رقم المحفظة',
-              style: TextStyle(fontWeight: FontWeight.bold)),
+          child: Text(
+            'حسب رقم المحفظة',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
         ),
         for (final s in stats)
           Card(
@@ -1407,8 +1413,10 @@ class _ReportsTabState extends State<ReportsTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(s.label,
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text(
+                    s.label,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   statLine('عدد المعاملات', '${s.totals.count}', null),
                   statLine('الداخل', fmt(s.totals.inSum), _green),
                   statLine('الخارج', fmt(s.totals.outSum), _red),
@@ -1420,8 +1428,10 @@ class _ReportsTabState extends State<ReportsTab> {
           ),
         const Padding(
           padding: EdgeInsets.fromLTRB(4, 12, 4, 4),
-          child: Text('أكثر الأرقام تعاملاً',
-              style: TextStyle(fontWeight: FontWeight.bold)),
+          child: Text(
+            'أكثر الأرقام تعاملاً',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
         ),
         if (parties.isEmpty)
           const Padding(
@@ -1474,7 +1484,9 @@ class _AccountsTabState extends State<AccountsTab> {
 
   Future<void> _loadReminder() async {
     try {
-      final r = await smsChannel.invokeMethod<Map<dynamic, dynamic>>('getReminder');
+      final r = await smsChannel.invokeMethod<Map<dynamic, dynamic>>(
+        'getReminder',
+      );
       if (!mounted) return;
       setState(() {
         _time = r == null
@@ -1489,8 +1501,10 @@ class _AccountsTabState extends State<AccountsTab> {
       await smsChannel.invokeMethod('cancelDaily');
     } else {
       await smsChannel.invokeMethod('requestNotifPermission');
-      await smsChannel
-          .invokeMethod('scheduleDaily', {'hour': t.hour, 'minute': t.minute});
+      await smsChannel.invokeMethod('scheduleDaily', {
+        'hour': t.hour,
+        'minute': t.minute,
+      });
     }
     if (mounted) setState(() => _time = t);
   }
@@ -1513,7 +1527,9 @@ class _AccountsTabState extends State<AccountsTab> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('حذف ${a.name}؟'),
-        content: const Text('سيتم حذف الحساب وأرصدته الافتتاحية. المعاملات نفسها لن تُحذف.'),
+        content: const Text(
+          'سيتم حذف الحساب وأرصدته الافتتاحية. المعاملات نفسها لن تُحذف.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -1559,8 +1575,10 @@ class _AccountsTabState extends State<AccountsTab> {
           ),
         const Padding(
           padding: EdgeInsets.fromLTRB(4, 12, 4, 4),
-          child: Text('أرقام المحافظ',
-              style: TextStyle(fontWeight: FontWeight.bold)),
+          child: Text(
+            'أرقام المحافظ',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
         ),
         if (widget.accounts.isEmpty)
           const Padding(
@@ -1656,17 +1674,17 @@ Future<void> importExcelReport(
       builder: (ctx) => _ImportDialog(sheets: workbook.sheets),
     );
     if (sheet == null) return;
-    final added =
-        await TxDb.importRows(sheet.rows, account: account);
+    final added = await TxDb.importRows(sheet.rows, account: account);
     await onDone();
-    snack(added == 0
-        ? 'كل صفوف "${sheet.name}" موجودة بالفعل، لم يتغير شيء.'
-        : 'تم استيراد $added معاملة من "${sheet.name}" إلى التقارير.');
+    snack(
+      added == 0
+          ? 'كل صفوف "${sheet.name}" موجودة بالفعل، لم يتغير شيء.'
+          : 'تم استيراد $added معاملة من "${sheet.name}" إلى التقارير.',
+    );
   } catch (e) {
     snack('تعذر استيراد الملف: $e');
   }
 }
-
 
 /// Lets the owner pick a sheet and shows what was understood before importing.
 class _ImportDialog extends StatefulWidget {
@@ -1710,7 +1728,8 @@ class _ImportDialogState extends State<_ImportDialog> {
                   for (var i = 0; i < widget.sheets.length; i++)
                     ChoiceChip(
                       label: Text(
-                          '${widget.sheets[i].name} (${widget.sheets[i].rows.length})'),
+                        '${widget.sheets[i].name} (${widget.sheets[i].rows.length})',
+                      ),
                       selected: _index == i,
                       onSelected: (_) => setState(() => _index = i),
                     ),
