@@ -6,6 +6,7 @@ import 'db.dart';
 import 'importer.dart';
 import 'logic.dart';
 import 'parser.dart';
+import 'review_strings.dart';
 
 const smsChannel = MethodChannel('wallet_log/sms');
 
@@ -121,7 +122,9 @@ class TxEdit {
   final Dir dir;
   final bool confirm; // false = only the note was saved
 
-  const TxEdit(this.note, this.type, this.dir, this.confirm);
+  final bool exclude;
+
+  const TxEdit(this.note, this.type, this.dir, this.confirm, {this.exclude = false});
 }
 
 /// Shows the original SMS next to the parsed result so the owner can verify it,
@@ -212,6 +215,12 @@ Future<TxEdit?> showTxDialog(BuildContext context, Tx t, double? mismatch) {
           ),
         ),
         actions: [
+          TextButton.icon(
+            onPressed: () => Navigator.pop(ctx,
+              TxEdit(c.text.trim(), t.type, t.dir, false, exclude: true)),
+            icon: const Icon(Icons.block),
+            label: Text(reviewText(ctx, 'استبعاد', 'Exclude')),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('إلغاء'),
