@@ -7,6 +7,10 @@ import 'exporter.dart';
 import 'logic.dart';
 import 'onboarding.dart';
 import 'tabs.dart';
+import 'exclusions.dart';
+import 'review_actions.dart';
+import 'review_strings.dart';
+import 'review_tab.dart';
 
 void main() => runApp(const WalletLogApp());
 
@@ -44,6 +48,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<Tx> _txs = [];
   List<Account> _accounts = [];
+  List<ExclusionRule> _exclusionRules = [];
   Map<String, double> _openings = {};
   Map<int, double> _mismatch = {};
   final TxFilter _filter = TxFilter();
@@ -61,6 +66,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     'التقارير',
     'الحسابات',
     'الذكاء الاصطناعي',
+    'المراجعة',
   ];
 
   @override
@@ -100,6 +106,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> _reload() async {
     final txs = await TxDb.allTx();
+    final exclusionRules = await TxDb.exclusionRules();
     final accounts = await TxDb.accounts();
     final openings = await TxDb.openings();
     final settings = await TxDb.allSettings();
@@ -114,6 +121,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _txs = txs;
+      _exclusionRules = exclusionRules;
       _accounts = accounts;
       _openings = openings;
       _mismatch = mismatch;
@@ -183,9 +191,34 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _reload();
   }
 
+  Future<void> _excludeTx(Tx t, {String? note}) async {
+    final decision = await showExclusionDialog(context, t, _txs);
+    if (decision == null) return;
+    await TxDb.exclude(t.id, decision.disposition,
+      match: decision.match, text: decision.text);
+    if (note != null && note != t.note) await TxDb.setNote(t.id, note);
+    await _reload();
+  }
+
+  Future<void> _restoreTx(Tx t) async {
+    await TxDb.restoreToReview(t.id);
+    await _reload();
+  }
+
   Future<void> _openTx(Tx t) async {
+    if (t.isExcluded) {
+      final action = await showExcludedMessage(context, t);
+      if (!mounted) return;
+      if (action == ExcludedMessageAction.restore) await _restoreTx(t);
+      if (action == ExcludedMessageAction.change) await _excludeTx(t);
+      return;
+    }
     final r = await showTxDialog(context, t, _mismatch[t.id]);
-    if (r == null) return;
+    if (r == null || !mounted) return;
+    if (r.exclude) {
+      await _excludeTx(t, note: r.note);
+      return;
+    }
     if (r.note != t.note) await TxDb.setNote(t.id, r.note);
     // Confirming a flagged message (or changing its type/direction) is what
     // makes it count; saving only the note leaves it waiting for review.
@@ -209,12 +242,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           padding: const EdgeInsets.all(8),
           child: Image.asset('assets/logo.png'),
         ),
-        title: Text('أموالي · ${_titles[_tab]}'),
+        title: Text('أموالي · ${_tab == 5 ? reviewText(context, 'المراجعة', 'Review') : _titles[_tab]}',
+          maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
             icon: const Icon(Icons.download),
             tooltip: 'تصدير تقرير Excel',
-            onPressed: () => exportExcelReport(
+            onPressed: _tab == 5 ? null : () => exportExcelReport(
               context,
               txs: _tab == 0
                   ? _txs.where((t) => _filter.matches(t, _accounts)).toList()
@@ -295,23 +329,34 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   },
                 ),
                 AiTab(txs: _txs, onChanged: _reload),
+                ReviewTab(
+                  txs: _txs, accounts: _accounts, rules: _exclusionRules,
+                  onOpen: _openTx, onExclude: _excludeTx, onRestore: _restoreTx,
+                  onDeleteRule: (rule) async {
+                    await TxDb.deleteExclusionRule(rule.id);
+                    await _reload();
+                  },
+                ),
               ],
             ),
       bottomNavigationBar: NavigationBar(
+        labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.list_alt), label: 'المعاملات'),
-          NavigationDestination(icon: Icon(Icons.today), label: 'اليومي'),
-          NavigationDestination(icon: Icon(Icons.bar_chart), label: 'التقارير'),
-          NavigationDestination(
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.list_alt), label: 'المعاملات'),
+          const NavigationDestination(icon: Icon(Icons.today), label: 'اليومي'),
+          const NavigationDestination(icon: Icon(Icons.bar_chart), label: 'التقارير'),
+          const NavigationDestination(
             icon: Icon(Icons.account_balance_wallet),
             label: 'الحسابات',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.auto_awesome),
             label: 'الذكاء',
           ),
+          NavigationDestination(icon: const Icon(Icons.rule),
+            label: reviewText(context, 'المراجعة', 'Review')),
         ],
       ),
     );

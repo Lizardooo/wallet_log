@@ -62,6 +62,7 @@ class Totals {
   double get net => inSum - outSum - fee;
 
   void add(Tx t) {
+    if (t.isExcluded) return;
     count++;
     if (t.review) {
       pending++;
@@ -192,6 +193,7 @@ class TxFilter {
   }
 
   bool matchesBase(Tx t, List<Account> accounts, {DateTime? now}) {
+    if (t.isExcluded) return false;
     if (accountId != null && accountFor(t, accounts)?.id != accountId) {
       return false;
     }
@@ -214,6 +216,7 @@ class TxFilter {
 Map<int, double> balanceMismatches(List<Tx> all, List<Account> accounts) {
   final groups = <String, List<Tx>>{};
   for (final t in all) {
+    if (t.isExcluded) continue;
     final a = accountFor(t, accounts);
     final k = a != null ? 'a${a.id}' : 'w${t.wallet}|${t.subId}';
     groups.putIfAbsent(k, () => []).add(t);
@@ -285,6 +288,7 @@ List<DayRow> dailyRows(
   List<Account> accounts,
   Map<String, double> openings,
 ) {
+  all = all.where((t) => !t.isExcluded).toList();
   final start = dayStartMs(day);
   final assigned = <int, int?>{
     for (final t in all) t.id: accountFor(t, accounts)?.id,
@@ -354,6 +358,7 @@ List<AccStat> accountStats(List<Tx> txs, List<Account> accounts) {
     m['a${a.id}'] = AccStat(accountLabel(a));
   }
   for (final t in txs) {
+    if (t.isExcluded) continue;
     final a = accountFor(t, accounts);
     final key = a != null ? 'a${a.id}' : 'w${t.wallet}';
     m.putIfAbsent(key, () => AccStat('${t.wallet} (غير مربوط)')).totals.add(t);
@@ -365,6 +370,7 @@ List<AccStat> accountStats(List<Tx> txs, List<Account> accounts) {
 List<MapEntry<TxType, Totals>> typeStats(List<Tx> txs) {
   final m = <TxType, Totals>{};
   for (final t in txs) {
+    if (t.isExcluded) continue;
     m.putIfAbsent(t.type, () => Totals()).add(t);
   }
   final list = m.entries.toList();
@@ -388,7 +394,7 @@ List<PartyStat> partyStats(List<Tx> txs) {
   final m = <String, PartyStat>{};
   for (final t in txs) {
     final p = t.party;
-    if (p == null || t.isUnknown || t.review) continue;
+    if (t.isExcluded || p == null || t.isUnknown || t.review) continue;
     final s = m.putIfAbsent(p, () => PartyStat(p));
     if (t.isIn) {
       s.inSum += t.amount;
