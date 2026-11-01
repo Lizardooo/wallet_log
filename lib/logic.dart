@@ -172,6 +172,7 @@ class TxFilter {
   Set<TxType> types = {};
   Dir? dir;
   bool reviewOnly = false;
+  String query = '';
   final DateFilter date;
 
   TxFilter({DatePeriod period = DatePeriod.all})
@@ -182,6 +183,7 @@ class TxFilter {
       types.isNotEmpty ||
       dir != null ||
       reviewOnly ||
+      query.trim().isNotEmpty ||
       date.period != DatePeriod.all;
 
   void clear() {
@@ -189,6 +191,7 @@ class TxFilter {
     types.clear();
     dir = null;
     reviewOnly = false;
+    query = '';
     date.clear();
   }
 
@@ -201,10 +204,27 @@ class TxFilter {
     return date.matches(t.ts, now: now);
   }
 
+  /// Free-text search over the other party, note, wallet, amount and SMS text.
+  bool _matchesQuery(Tx t) {
+    final q = normalizeDigits(query).trim().toLowerCase();
+    if (q.isEmpty) return true;
+    final hay = [
+      t.party ?? '',
+      t.note,
+      t.wallet,
+      t.type.label,
+      fmt(t.amount),
+      t.amount.toString(),
+      t.body,
+    ].join(' ').toLowerCase();
+    return hay.contains(q);
+  }
+
   bool matches(Tx t, List<Account> accounts, {DateTime? now}) {
     if (!matchesBase(t, accounts, now: now)) return false;
     final pending = t.review || t.isUnknown;
     // The review view is independent of the last in/out selection.
+    if (!_matchesQuery(t)) return false;
     if (reviewOnly) return pending;
     return !pending && (dir == null || t.dir == dir);
   }

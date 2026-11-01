@@ -455,6 +455,21 @@ class TransactionsTab extends StatefulWidget {
 
 class _TransactionsTabState extends State<TransactionsTab> {
   TxFilter get _f => widget.filter;
+  late final TextEditingController _search =
+      TextEditingController(text: widget.filter.query);
+  late bool _searching = widget.filter.query.isNotEmpty;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _closeSearch() {
+    _search.clear();
+    _apply(() => _f.query = '');
+    setState(() => _searching = false);
+  }
 
   void _apply(VoidCallback change) {
     change();
@@ -724,6 +739,11 @@ class _TransactionsTabState extends State<TransactionsTab> {
                 ),
                 const SizedBox(width: 6),
                 IconButton.filledTonal(
+                  tooltip: 'بحث',
+                  onPressed: () => setState(() => _searching = !_searching),
+                  icon: const Icon(Icons.search),
+                ),
+                IconButton.filledTonal(
                   tooltip: 'تصفية',
                   onPressed: _openFilters,
                   icon: Badge(
@@ -804,9 +824,33 @@ class _TransactionsTabState extends State<TransactionsTab> {
             ),
           );
 
+    final searchBar = !_searching
+        ? const SizedBox.shrink()
+        : Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+            child: TextField(
+              controller: _search,
+              autofocus: _search.text.isEmpty,
+              textInputAction: TextInputAction.search,
+              onChanged: (v) => _apply(() => _f.query = v),
+              decoration: InputDecoration(
+                hintText: 'ابحث بالرقم أو الاسم أو المبلغ أو الملاحظة',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: IconButton(
+                  tooltip: 'إغلاق البحث',
+                  icon: const Icon(Icons.close),
+                  onPressed: _closeSearch,
+                ),
+                isDense: true,
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          );
+
     return Column(
       children: [
         toolbar,
+        searchBar,
         summary,
         Expanded(
           child: items.isEmpty
@@ -1218,6 +1262,46 @@ class _DailyTabState extends State<DailyTab> {
   }
 }
 
+/// The per-day opening / in / out / remaining view, opened from the accounts
+/// tab. It reloads the opening balances itself after each edit because a pushed
+/// page is not rebuilt by the home page.
+class DailyPage extends StatefulWidget {
+  final List<Tx> txs;
+  final List<Account> accounts;
+  final Map<String, double> openings;
+
+  const DailyPage({
+    super.key,
+    required this.txs,
+    required this.accounts,
+    required this.openings,
+  });
+
+  @override
+  State<DailyPage> createState() => _DailyPageState();
+}
+
+class _DailyPageState extends State<DailyPage> {
+  late Map<String, double> _openings = widget.openings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('رصيد اليوم والمتبقي')),
+      body: DailyTab(
+        txs: widget.txs,
+        accounts: widget.accounts,
+        openings: _openings,
+        onSetOpening: (id, day, amount) async {
+          await TxDb.setOpening(id, day, amount);
+          final fresh = await TxDb.openings();
+          if (mounted) setState(() => _openings = fresh);
+        },
+      ),
+    );
+  }
+}
+
 // ------------------------------------------------------------ reports tab
 
 class ReportsTab extends StatefulWidget {
@@ -1469,6 +1553,7 @@ class AccountsTab extends StatefulWidget {
   final List<Account> accounts;
   final Future<void> Function(Account) onSave;
   final Future<void> Function(int) onDelete;
+  final VoidCallback onOpenDaily;
 
   const AccountsTab({
     super.key,
@@ -1476,6 +1561,7 @@ class AccountsTab extends StatefulWidget {
     required this.accounts,
     required this.onSave,
     required this.onDelete,
+    required this.onOpenDaily,
   });
 
   @override
@@ -1559,6 +1645,16 @@ class _AccountsTabState extends State<AccountsTab> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
+        if (widget.accounts.isNotEmpty)
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.today),
+              title: const Text('رصيد اليوم والمتبقي'),
+              subtitle: const Text('الداخل والخارج والمتبقي لكل رقم'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: widget.onOpenDaily,
+            ),
+          ),
         Card(
           child: SwitchListTile(
             title: const Text('تذكير يومي بالرصيد الافتتاحي'),

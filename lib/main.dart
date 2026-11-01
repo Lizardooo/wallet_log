@@ -62,7 +62,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   static const _titles = [
     'المعاملات',
-    'اليومي',
     'التقارير',
     'الحسابات',
     'الذكاء الاصطناعي',
@@ -87,7 +86,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _reload();
     if (!mounted) return;
     // The owner finished (or skipped) the wizard: show the reports first.
-    setState(() => _tab = 2);
+    setState(() => _tab = 1);
     await _scan();
   }
 
@@ -191,6 +190,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _reload();
   }
 
+  Future<void> _openDaily() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DailyPage(
+          txs: _txs,
+          accounts: _accounts,
+          openings: _openings,
+        ),
+      ),
+    );
+    await _reload();
+  }
+
   Future<void> _excludeTx(Tx t, {String? note}) async {
     final decision = await showExclusionDialog(context, t, _txs);
     if (decision == null) return;
@@ -242,17 +254,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           padding: const EdgeInsets.all(8),
           child: Image.asset('assets/logo.png'),
         ),
-        title: Text('أموالي · ${_tab == 5 ? reviewText(context, 'المراجعة', 'Review') : _titles[_tab]}',
+        title: Text('أموالي · ${_tab == 4 ? reviewText(context, 'المراجعة', 'Review') : _titles[_tab]}',
           maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
             icon: const Icon(Icons.download),
             tooltip: 'تصدير تقرير Excel',
-            onPressed: _tab == 5 ? null : () => exportExcelReport(
+            onPressed: _tab == 4 ? null : () => exportExcelReport(
               context,
               txs: _tab == 0
                   ? _txs.where((t) => _filter.matches(t, _accounts)).toList()
-                  : _tab == 2
+                  : _tab == 1
                       ? _txs
                           .where((t) => _reportFilter.matchesBase(t, _accounts))
                           .toList()
@@ -301,15 +313,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   onTap: _openTx,
                   onRefresh: _scan,
                 ),
-                DailyTab(
-                  txs: _txs,
-                  accounts: _accounts,
-                  openings: _openings,
-                  onSetOpening: (id, day, amount) async {
-                    await TxDb.setOpening(id, day, amount);
-                    await _reload();
-                  },
-                ),
                 ReportsTab(
                   filter: _reportFilter,
                   txs: _txs,
@@ -327,6 +330,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     await TxDb.deleteAccount(id);
                     await _reload();
                   },
+                  onOpenDaily: _openDaily,
                 ),
                 AiTab(txs: _txs, onChanged: _reload),
                 ReviewTab(
@@ -345,7 +349,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         onDestinationSelected: (i) => setState(() => _tab = i),
         destinations: [
           const NavigationDestination(icon: Icon(Icons.list_alt), label: 'المعاملات'),
-          const NavigationDestination(icon: Icon(Icons.today), label: 'اليومي'),
           const NavigationDestination(icon: Icon(Icons.bar_chart), label: 'التقارير'),
           const NavigationDestination(
             icon: Icon(Icons.account_balance_wallet),
