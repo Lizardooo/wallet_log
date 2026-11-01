@@ -48,7 +48,6 @@ class OnboardingPage extends StatefulWidget {
 
 class _OnboardingPageState extends State<OnboardingPage> {
   final _pages = PageController();
-  final _phone = TextEditingController();
   final _key = TextEditingController();
   final _simDrafts = <_SimDraft>[];
   int _step = 0;
@@ -73,7 +72,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
   @override
   void dispose() {
     _pages.dispose();
-    _phone.dispose();
     _key.dispose();
     for (final d in _simDrafts) {
       d.dispose();
@@ -170,10 +168,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
     setState(() => _saving = true);
     try {
       if (!skipped) {
-        final phone = normalizeDigits(_phone.text.trim());
-        if (phone.isNotEmpty) {
-          await TxDb.setSetting(TxDb.settingsOwnerPhone, phone);
-        }
         for (final d in _simDrafts) {
           if (!d.selected) continue;
           final number = normalizeDigits(d.number.text.trim());
@@ -245,7 +239,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
   Widget build(BuildContext context) {
     final title = switch (_step) {
       0 => 'شرائحك ومحافظك',
-      1 => 'بياناتك',
       _ => 'الذكاء الاصطناعي',
     };
     return Scaffold(
@@ -261,12 +254,12 @@ class _OnboardingPageState extends State<OnboardingPage> {
       ),
       body: Column(
         children: [
-          LinearProgressIndicator(value: (_step + 1) / 3),
+          LinearProgressIndicator(value: (_step + 1) / 2),
           Expanded(
             child: PageView(
               controller: _pages,
               physics: const NeverScrollableScrollPhysics(),
-              children: [_step0(), _step1(), _step2()],
+              children: [_step0(), _step1()],
             ),
           ),
           SafeArea(
@@ -282,7 +275,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                       label: const Text('السابق'),
                     ),
                   const Spacer(),
-                  if (_step < 2)
+                  if (_step < 1)
                     FilledButton.icon(
                       onPressed: _saving ? null : _next,
                       icon: const Icon(Icons.chevron_left),
@@ -484,60 +477,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
   }
 
   Widget _step1() {
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        Center(
-          child: Image.asset('assets/logo.png', height: 84),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'أهلاً بك في أموالي',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'رقمك المسجل عليه المحافظ. الإعداد مرة واحدة فقط: بعد كده التطبيق '
-          'يقرأ رسائل الأرقام اللي اخترتها ويجهز التقارير.',
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 24),
-        TextField(
-          controller: _phone,
-          keyboardType: TextInputType.phone,
-          textDirection: TextDirection.ltr,
-          decoration: const InputDecoration(
-            labelText: 'رقم موبايلك',
-            helperText: 'الرقم المسجل عليه المحافظ (11 رقم)',
-            border: OutlineInputBorder(),
-            prefixIcon: Icon(Icons.phone_android),
-          ),
-        ),
-        const SizedBox(height: 20),
-        const Card(
-          child: Padding(
-            padding: EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Icon(Icons.lock_outline, size: 20),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'كل شيء يُحفظ على هذا الهاتف فقط. لا يُرفع أي شيء لأي خدمة '
-                    'إلا إذا شغّلت التصنيف بالذكاء الاصطناعي.',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _step2() {
     final shown =
         _showAllModels ? _models : _models.where((m) => m.free).toList();
     return ListView(

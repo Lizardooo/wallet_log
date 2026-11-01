@@ -4,6 +4,8 @@ import 'package:excel/excel.dart';
 
 import 'parser.dart';
 
+const excelWalletFallback = 'من Excel';
+
 /// One transaction read from an Excel report, ready to be stored.
 class ImportRow {
   final String key; // duplicate-detection key
@@ -332,7 +334,7 @@ SheetImport _readSheet(String name, Sheet sheet) {
     rows.add(ImportRow(
       key: 'xlsx|${stableHash('$name|$ts|${amount.abs()}|${type.name}|$raw')}',
       ts: ts,
-      wallet: wallet.isEmpty ? 'من Excel' : wallet,
+      wallet: wallet.isEmpty ? excelWalletFallback : wallet,
       type: type,
       dir: dir,
       amount: amount.abs(),

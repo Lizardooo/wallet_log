@@ -14,8 +14,7 @@ Opening the app for the first time shows a short setup instead of the tabs:
    and number when the phone reports it. Tick each number that carries a wallet
    and choose its wallet type(s); type the number by hand when it is not
    detected. Only messages for the chosen wallets are stored.
-2. **بياناتك** - your own mobile number.
-3. **الذكاء الاصطناعي** - optional: paste a Gemini API key, let the app list the
+2. **الذكاء الاصطناعي** - optional: paste a Gemini API key, let the app list the
    free models available to that key, and pick one.
 
 Finishing (or "تخطي الآن") stores the setup and opens the **التقارير** tab.

@@ -367,7 +367,8 @@ class TxDb {
   /// Inserts rows read from an Excel report. Rows already present (same key) are
   /// skipped, so importing the same file twice changes nothing. Imported rows
   /// are marked manual so the SMS scan never re-classifies them.
-  static Future<int> importRows(List<ImportRow> rows) async {
+  static Future<int> importRows(List<ImportRow> rows,
+      {Account? account}) async {
     if (rows.isEmpty) return 0;
     final db = await _database;
     final keys = await db.query('tx', columns: ['k']);
@@ -379,19 +380,24 @@ class TxDb {
     for (final row in rows) {
       if (present.contains(row.key)) continue;
       present.add(row.key);
+      final fromFile =
+          row.wallet.isNotEmpty && row.wallet != excelWalletFallback;
+      final wallet =
+          fromFile ? row.wallet : (account?.wallet ?? row.wallet);
+      final subId = fromFile ? null : account?.subId;
       batch.insert(
         'tx',
         {
           'k': row.key,
           'ts': row.ts,
-          'wallet': row.wallet,
+          'wallet': wallet,
           'dir': dirString(row.dir),
           'type': row.type.name,
           'amount': row.amount,
           'fee': row.fee,
           'party': row.party,
           'balance': null,
-          'sub_id': null,
+          'sub_id': subId,
           'review': 0,
           'manual': 1,
           'ai': 0,

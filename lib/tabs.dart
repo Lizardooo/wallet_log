@@ -1177,9 +1177,18 @@ class ReportsTab extends StatefulWidget {
 
 class _ReportsTabState extends State<ReportsTab> {
   int _period = 3;
+  int? _accountId;
   DateTimeRange? _custom;
   static const _labels = ['اليوم', '7 أيام', '30 يوم', 'هذا الشهر', 'الكل'];
   static const _never = 253402300799000; // year 9999
+
+  Account? _selectedAccount() {
+    if (_accountId == null) return null;
+    for (final a in widget.accounts) {
+      if (a.id == _accountId) return a;
+    }
+    return null;
+  }
 
   int _from() {
     final now = DateTime.now();
@@ -1284,7 +1293,8 @@ class _ReportsTabState extends State<ReportsTab> {
         builder: (ctx) => _ImportDialog(sheets: workbook.sheets),
       );
       if (sheet == null) return;
-      final added = await TxDb.importRows(sheet.rows);
+      final added =
+          await TxDb.importRows(sheet.rows, account: _selectedAccount());
       await widget.onChanged();
       _snack(added == 0
           ? 'كل صفوف "${sheet.name}" موجودة بالفعل، لم يتغير شيء.'
@@ -1298,9 +1308,17 @@ class _ReportsTabState extends State<ReportsTab> {
   Widget build(BuildContext context) {
     final from = _from();
     final to = _to();
-    final txs = widget.txs.where((t) => t.ts >= from && t.ts < to).toList();
+    final periodTxs =
+        widget.txs.where((t) => t.ts >= from && t.ts < to).toList();
+    final account = _selectedAccount();
+    final txs = account == null
+        ? periodTxs
+        : periodTxs
+            .where((t) => accountFor(t, widget.accounts)?.id == account.id)
+            .toList();
     final all = totalsOf(txs);
-    final stats = accountStats(txs, widget.accounts);
+    final stats =
+        accountStats(txs, account == null ? widget.accounts : [account]);
     final types = typeStats(txs);
     final parties = partyStats(txs);
     final c = _custom;
@@ -1327,6 +1345,29 @@ class _ReportsTabState extends State<ReportsTab> {
             ),
           ],
         ),
+        if (widget.accounts.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          const Text('المحفظة', style: TextStyle(fontSize: 12)),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              ChoiceChip(
+                label: const Text('كل المحافظ'),
+                selected: account == null,
+                onSelected: (_) => setState(() => _accountId = null),
+              ),
+              for (final a in widget.accounts)
+                if (a.id != null)
+                  ChoiceChip(
+                    label: Text(accountLabel(a)),
+                    selected: account?.id == a.id,
+                    onSelected: (_) => setState(() => _accountId = a.id),
+                  ),
+            ],
+          ),
+        ],
         const SizedBox(height: 8),
         OutlinedButton.icon(
           onPressed: _importExcel,
