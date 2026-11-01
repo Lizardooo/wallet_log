@@ -936,7 +936,6 @@ class _TransactionsTabState extends State<TransactionsTab> {
                         ],
                       ),
                     ),
-                  ),
                   if (pending)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
