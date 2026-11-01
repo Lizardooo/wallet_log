@@ -2,6 +2,7 @@ import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'importer.dart';
+import 'exclusions.dart';
 import 'parser.dart';
 
 class Tx {
@@ -21,6 +22,9 @@ class Tx {
   final bool manual; // the owner corrected it by hand
   final bool ai; // classified by the Gemini model
   final String aiNote; // the model's short reason
+  final TxDisposition disposition;
+  final int? exclusionRuleId;
+  final bool ruleExempt;
 
   const Tx({
     required this.id,
@@ -39,7 +43,12 @@ class Tx {
     this.manual = false,
     this.ai = false,
     this.aiNote = '',
+    this.disposition = TxDisposition.active,
+    this.exclusionRuleId,
+    this.ruleExempt = false,
   });
+
+  bool get isExcluded => disposition != TxDisposition.active;
 
   bool get isIn => dir == Dir.inFlow;
   bool get isOut => dir == Dir.outFlow;
@@ -163,7 +172,15 @@ class TxDb {
       'manual INTEGER NOT NULL DEFAULT 0, '
       'ai INTEGER NOT NULL DEFAULT 0, '
       "ai_note TEXT NOT NULL DEFAULT '', "
-      "note TEXT NOT NULL DEFAULT '', body TEXT)",
+      "note TEXT NOT NULL DEFAULT '', body TEXT, "
+      "disposition TEXT NOT NULL DEFAULT 'active', "
+      'rule_exempt INTEGER NOT NULL DEFAULT 0)',
+    );
+    await d.execute(
+      'CREATE TABLE IF NOT EXISTS exclusion_rules('
+      'id INTEGER PRIMARY KEY AUTOINCREMENT, wallet TEXT NOT NULL, '
+      'match_mode TEXT NOT NULL, pattern TEXT NOT NULL, '
+      'UNIQUE(wallet, match_mode, pattern))',
     );
     await d.execute(
       'CREATE TABLE IF NOT EXISTS accounts('
@@ -192,7 +209,7 @@ class TxDb {
   static Future<Database> get _database async {
     return _db ??= await openDatabase(
       join(await getDatabasesPath(), 'wallet.db'),
-      version: 4,
+      version: 5,
       onCreate: (d, v) => _create(d),
       onUpgrade: (d, oldV, newV) async {
         if (oldV < 2) {
@@ -220,6 +237,8 @@ class TxDb {
         await _addColumn(d, 'tx', 'ai', 'INTEGER NOT NULL DEFAULT 0');
         await _addColumn(d, 'tx', 'ai_note', "TEXT NOT NULL DEFAULT ''");
         await _addColumn(d, 'accounts', 'slot', 'INTEGER');
+        await _addColumn(d, 'tx', 'disposition', "TEXT NOT NULL DEFAULT 'active'");
+        await _addColumn(d, 'tx', 'rule_exempt', 'INTEGER NOT NULL DEFAULT 0');
       },
     );
   }
@@ -235,22 +254,30 @@ class TxDb {
       {List<Account>? accounts}) async {
     final db = await _database;
     final batch = db.batch();
+    final rules = await _rules(db);
     final chosen =
         accounts != null && accounts.isNotEmpty ? accounts : null;
     for (final m in msgs) {
       final p = parseSms(m.sender, m.body);
       final key = smsKey(m.body, m.ts);
+      final wallet = p?.wallet ?? detectWallet(m.sender, m.body);
+      final rule = wallet == null ? null
+          : matchingExclusionRule(rules, wallet, m.body);
       if (p == null) {
-        // Saved by an older, looser parser: drop it unless the owner touched it.
-        batch.delete(
-          'tx',
-          where: "k = ? AND manual = 0 AND ai = 0 AND note = ''",
-          whereArgs: [key],
-        );
+        // Do not fabricate a transaction for a message the parser rejected.
+        // Retain previously archived matches and deliberate owner decisions.
+        if (rule == null) {
+          batch.delete(
+            'tx',
+            where: "k = ? AND manual = 0 AND ai = 0 AND note = '' "
+                "AND disposition = 'active' AND rule_exempt = 0",
+            whereArgs: [key],
+          );
+        }
         continue;
       }
       if (chosen != null &&
-          !smsBelongsToAccounts(p.wallet, m.subId, chosen)) {
+          !smsBelongsToAccounts(wallet!, m.subId, chosen)) {
         continue;
       }
       final dirStr = dirString(p.dir);
@@ -259,7 +286,7 @@ class TxDb {
         {
           'k': key,
           'ts': m.ts,
-          'wallet': p.wallet,
+          'wallet': wallet,
           'dir': dirStr,
           'type': p.type.name,
           'amount': p.amount,
@@ -267,7 +294,7 @@ class TxDb {
           'party': p.party,
           'balance': p.balance,
           'sub_id': m.subId,
-          'review': p.review ? 1 : 0,
+          'review': (rule != null || p.review) ? 1 : 0,
           'body': m.body,
         },
         conflictAlgorithm: ConflictAlgorithm.ignore,
@@ -275,16 +302,16 @@ class TxDb {
       batch.update(
         'tx',
         {
-          'wallet': p.wallet,
+          'wallet': wallet,
           'dir': dirStr,
           'type': p.type.name,
           'amount': p.amount,
           'fee': p.fee,
           'party': p.party,
           'balance': p.balance,
-          'review': p.review ? 1 : 0,
+          'review': (rule != null || p.review) ? 1 : 0,
         },
-        where: 'k = ? AND manual = 0 AND ai = 0',
+        where: "k = ? AND manual = 0 AND ai = 0 AND disposition = 'active' AND rule_exempt = 0",
         whereArgs: [key],
       );
     }
@@ -294,8 +321,14 @@ class TxDb {
   static Future<List<Tx>> allTx() async {
     final db = await _database;
     final rows = await db.query('tx', orderBy: 'ts DESC, id DESC');
+    final rules = await _rules(db);
     return rows.map((r) {
       final typeStr = r['type'] as String?;
+      final stored = dispositionFromString(r['disposition'] as String?);
+      final exempt = (r['rule_exempt'] as int?) == 1;
+      final rule = stored == TxDisposition.active && !exempt
+          ? matchingExclusionRule(rules, (r['wallet'] as String?) ?? '',
+              (r['body'] as String?) ?? '') : null;
       return Tx(
         id: r['id'] as int,
         ts: r['ts'] as int,
@@ -316,6 +349,9 @@ class TxDb {
         manual: (r['manual'] as int?) == 1,
         ai: (r['ai'] as int?) == 1,
         aiNote: (r['ai_note'] as String?) ?? '',
+        disposition: rule == null ? stored : TxDisposition.ignored,
+        exclusionRuleId: rule?.id,
+        ruleExempt: exempt,
       );
     }).toList();
   }
@@ -328,40 +364,127 @@ class TxDb {
   /// The owner's correction of type and direction; it is never overwritten.
   static Future<void> setClass(int id, TxType type, Dir dir) async {
     final db = await _database;
-    await db.update(
-      'tx',
-      {
-        'type': type.name,
-        'dir': dirString(dir),
-        'review': 0,
-        'manual': 1,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.transaction((txn) async {
+      final rows = await txn.query('tx', where: 'id = ?', whereArgs: [id]);
+      final rules = await _rules(txn);
+      if (rows.isEmpty || _excluded(rows.first, rules)) return;
+      await txn.update('tx', {
+        'type': type.name, 'dir': dirString(dir), 'review': 0, 'manual': 1,
+      }, where: 'id = ?', whereArgs: [id]);
+    });
   }
 
-  /// Stores the model's classification. The owner's own corrections win, so
-  /// rows with manual = 1 are left alone.
-  static Future<void> applyAiUpdates(List<AiUpdate> updates) async {
-    if (updates.isEmpty) return;
+  /// AI responses already in flight cannot reactivate excluded messages.
+  static Future<Set<int>> applyAiUpdates(List<AiUpdate> updates) async {
+    if (updates.isEmpty) return {};
     final db = await _database;
-    final batch = db.batch();
-    for (final u in updates) {
-      batch.update(
-        'tx',
-        {
-          'type': u.type.name,
-          'dir': dirString(u.dir),
-          'review': u.confirm ? 0 : 1,
-          'ai': 1,
-          'ai_note': u.note,
-        },
-        where: 'id = ? AND manual = 0',
-        whereArgs: [u.id],
-      );
+    return db.transaction<Set<int>>((txn) async {
+      final rules = await _rules(txn);
+      final rows = await txn.query('tx');
+      final allowed = {for (final r in rows)
+        if (r['manual'] != 1 && !_excluded(r, rules)) r['id'] as int};
+      final batch = txn.batch();
+      for (final u in updates) {
+        if (!allowed.contains(u.id)) continue;
+        batch.update('tx', {
+          'type': u.type.name, 'dir': dirString(u.dir),
+          'review': u.confirm ? 0 : 1, 'ai': 1, 'ai_note': u.note,
+        }, where: "id = ? AND manual = 0 AND disposition = 'active'",
+          whereArgs: [u.id]);
+      }
+      await batch.commit(noResult: true);
+      return {for (final u in updates) if (allowed.contains(u.id)) u.id};
+    });
+  }
+
+  /// Re-read each batch, not only the initial queue, so a message excluded
+  /// while another AI request runs is not sent in a later batch.
+  static Future<List<Tx>> classificationBatch(Iterable<int> ids) async {
+    final current = {for (final t in await allTx()) t.id: t};
+    return [for (final id in ids)
+      if (current[id] != null && !current[id]!.isExcluded) current[id]!];
+  }
+
+  static bool _excluded(Map<String, Object?> row, List<ExclusionRule> rules) =>
+      dispositionFromString(row['disposition'] as String?) != TxDisposition.active ||
+      (row['rule_exempt'] != 1 && matchingExclusionRule(rules,
+        (row['wallet'] as String?) ?? '', (row['body'] as String?) ?? '') != null);
+
+  static Future<List<ExclusionRule>> _rules(DatabaseExecutor db) async {
+    final rows = await db.query('exclusion_rules', orderBy: 'id');
+    return [for (final r in rows) ExclusionRule(
+      id: r['id'] as int, wallet: r['wallet'] as String,
+      match: r['match_mode'] == 'contains' ? ExclusionMatch.contains : ExclusionMatch.exact,
+      text: r['pattern'] as String)];
+  }
+
+  static Future<List<ExclusionRule>> exclusionRules() async => _rules(await _database);
+
+  /// Store a deliberate decision separately from parser/manual/AI provenance.
+  /// A future rule applies retroactively and to new matching messages.
+  static Future<void> exclude(int id, TxDisposition disposition, {
+    ExclusionMatch? match, String? text,
+  }) async {
+    if (disposition == TxDisposition.active) {
+      throw ArgumentError('Use restoreToReview to restore a message');
     }
-    await batch.commit(noResult: true);
+    final pattern = normalizeExclusionText(text ?? '');
+    if (match != null && (disposition != TxDisposition.ignored || pattern.isEmpty)) {
+      throw ArgumentError('A non-empty rule requires the ignored state');
+    }
+    final db = await _database;
+    await db.transaction((txn) async {
+      final rows = await txn.query('tx', where: 'id = ?', whereArgs: [id]);
+      if (rows.isEmpty) return;
+      if (match != null) {
+        final wallet = (rows.first['wallet'] as String?) ?? '';
+        if (wallet.isEmpty) throw ArgumentError('A wallet is required');
+        await txn.insert('exclusion_rules', {
+          'wallet': wallet, 'match_mode': match.name, 'pattern': pattern,
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      await txn.update('tx', {'disposition': disposition.name, 'rule_exempt': 0},
+        where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  /// Restoring never silently counts an operation. This exact record is exempt
+  /// from text rules until its owner explicitly excludes it again.
+  static Future<void> restoreToReview(int id) async {
+    final db = await _database;
+    await db.update('tx', {
+      'disposition': TxDisposition.active.name, 'review': 1, 'rule_exempt': 1,
+    }, where: 'id = ?', whereArgs: [id]);
+  }
+
+  static Future<void> deleteExclusionRule(int id) async {
+    final db = await _database;
+    await db.transaction((txn) async {
+      final rules = await _rules(txn);
+      final selected = rules.where((r) => r.id == id).toList();
+      if (selected.isEmpty) return;
+      final rows = await txn.query('tx',
+        where: "disposition = 'active' AND rule_exempt = 0");
+      final batch = txn.batch();
+      for (final row in rows) {
+        if (selected.single.matches((row['wallet'] as String?) ?? '',
+            (row['body'] as String?) ?? '')) {
+          final another = matchingExclusionRule(rules.where((r) => r.id != id),
+            (row['wallet'] as String?) ?? '', (row['body'] as String?) ?? '');
+          batch.update('tx', {
+            'review': 1,
+            if (another == null) 'rule_exempt': 1,
+          }, where: 'id = ?', whereArgs: [row['id']]);
+        }
+      }
+      batch.delete('exclusion_rules', where: 'id = ?', whereArgs: [id]);
+      await batch.commit(noResult: true);
+    });
+  }
+
+  static Future<void> close() async {
+    await _db?.close();
+    _db = null;
   }
 
   /// Inserts rows read from an Excel report. Rows already present (same key) are

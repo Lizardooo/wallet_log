@@ -147,7 +147,9 @@ class _AiTabState extends State<AiTab> {
     await TxDb.setSetting(TxDb.settingsModel, id);
   }
 
-  List<Tx> get _unclear => widget.txs
+  List<Tx> get _eligible => widget.txs.where((t) => !t.isExcluded).toList();
+
+  List<Tx> get _unclear => _eligible
       .where((t) => t.review || t.isUnknown || t.type == TxType.other)
       .toList();
 
@@ -162,7 +164,7 @@ class _AiTabState extends State<AiTab> {
       _snack('اضغط "جلب الموديلات" واختر موديلاً');
       return;
     }
-    final targets = onlyUnclear ? _unclear : widget.txs;
+    final targets = onlyUnclear ? _unclear : _eligible;
     if (targets.isEmpty) {
       _snack('لا توجد رسائل لتصنيفها');
       return;
@@ -181,7 +183,13 @@ class _AiTabState extends State<AiTab> {
     var kept = 0;
     try {
       for (var i = 0; i < targets.length; i += _batch) {
-        final chunk = targets.skip(i).take(_batch).toList();
+        final scheduled = targets.skip(i).take(_batch).toList();
+        final chunk = await TxDb.classificationBatch(scheduled.map((t) => t.id));
+        if (!mounted) return;
+        if (chunk.isEmpty) {
+          setState(() => _done += scheduled.length);
+          continue;
+        }
         final items = [
           for (final t in chunk)
             AiItem(
@@ -209,17 +217,16 @@ class _AiTabState extends State<AiTab> {
             confirm: confident,
             note: r.reason,
           ));
-          if (confident) {
-            applied++;
-          } else {
-            kept++;
-          }
         }
-        await TxDb.applyAiUpdates(updates);
+        final saved = await TxDb.applyAiUpdates(updates);
+        for (final u in updates) {
+          if (!saved.contains(u.id)) continue;
+          if (u.confirm) { applied++; } else { kept++; }
+        }
         await widget.onChanged();
         if (!mounted) return;
         setState(() {
-          _done += chunk.length;
+          _done += scheduled.length;
           _applied = applied;
           _kept = kept;
         });
@@ -236,7 +243,7 @@ class _AiTabState extends State<AiTab> {
   @override
   Widget build(BuildContext context) {
     final unclear = _unclear.length;
-    final all = widget.txs.length;
+    final all = _eligible.length;
     final shown = _showAll ? _models : _models.where(_isFree).toList();
 
     return ListView(
