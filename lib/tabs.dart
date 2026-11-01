@@ -406,7 +406,7 @@ class _DayHeader {
   const _DayHeader(this.day, this.totals);
 }
 
-class TransactionsTab extends StatelessWidget {
+class TransactionsTab extends StatefulWidget {
   final List<Tx> txs;
   final List<Account> accounts;
   final TxFilter filter;
@@ -426,200 +426,410 @@ class TransactionsTab extends StatelessWidget {
     required this.onRefresh,
   });
 
-  void _setRange(DateTime? from, DateTime? to) {
-    filter.from = from;
-    filter.to = to;
-    onChanged();
+  @override
+  State<TransactionsTab> createState() => _TransactionsTabState();
+}
+
+class _TransactionsTabState extends State<TransactionsTab> {
+  Dir? _dir; // null = all, inFlow = incoming only, outFlow = outgoing only
+  bool _review = false;
+
+  TxFilter get _f => widget.filter;
+
+  void _apply(VoidCallback change) {
+    change();
+    widget.onChanged();
+    if (mounted) setState(() {});
   }
 
-  Future<void> _pickRange(BuildContext context) async {
+  static DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  bool _isRange(DateTime from, DateTime to) {
+    final f = _f.from;
+    final t = _f.to;
+    return f != null && t != null && _day(f) == _day(from) && _day(t) == _day(to);
+  }
+
+  int get _activeFilters =>
+      (_f.accountId != null ? 1 : 0) +
+      (_f.types.isNotEmpty ? 1 : 0) +
+      ((_f.from != null || _f.to != null) ? 1 : 0);
+
+  Future<void> _pickRange() async {
     final now = DateTime.now();
-    final f = filter.from;
-    final e = filter.to;
+    final f = _f.from;
+    final e = _f.to;
     final r = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2020),
-      lastDate: DateTime(now.year, now.month, now.day),
+      lastDate: _day(now),
       initialDateRange:
           (f != null && e != null) ? DateTimeRange(start: f, end: e) : null,
     );
-    if (r != null) _setRange(r.start, r.end);
+    if (r != null) {
+      _apply(() {
+        _f.from = r.start;
+        _f.to = r.end;
+      });
+    }
   }
+
+  void _openFilters() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          void change(VoidCallback c) {
+            _apply(c);
+            setSheet(() {});
+          }
+
+          final now = DateTime.now();
+          final today = _day(now);
+          final yesterday = DateTime(today.year, today.month, today.day - 1);
+          final week = DateTime(today.year, today.month, today.day - 6);
+          final month = DateTime(now.year, now.month);
+          final noRange = _f.from == null && _f.to == null;
+          final custom = !noRange &&
+              !_isRange(today, today) &&
+              !_isRange(yesterday, yesterday) &&
+              !_isRange(week, today) &&
+              !_isRange(month, today);
+          final presentTypes = TxType.values
+              .where((ty) => widget.txs.any((t) => t.type == ty))
+              .toList();
+
+          Widget title(String s) => Padding(
+                padding: const EdgeInsets.only(top: 14, bottom: 6),
+                child: Text(s,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 13)),
+              );
+
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text('تصفية المعاملات',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 16)),
+                      ),
+                      if (_activeFilters > 0)
+                        TextButton(
+                          onPressed: () => change(() {
+                            _f.accountId = null;
+                            _f.types.clear();
+                            _f.from = null;
+                            _f.to = null;
+                          }),
+                          child: const Text('مسح الكل'),
+                        ),
+                    ],
+                  ),
+                  if (widget.accounts.isNotEmpty) ...[
+                    title('الرقم'),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('الكل'),
+                          selected: _f.accountId == null,
+                          onSelected: (_) => change(() => _f.accountId = null),
+                        ),
+                        for (final a in widget.accounts)
+                          ChoiceChip(
+                            label: Text(a.name),
+                            selected: _f.accountId == a.id,
+                            onSelected: (_) =>
+                                change(() => _f.accountId = a.id),
+                          ),
+                      ],
+                    ),
+                  ],
+                  title('الفترة'),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('الكل'),
+                        selected: noRange,
+                        onSelected: (_) => change(() {
+                          _f.from = null;
+                          _f.to = null;
+                        }),
+                      ),
+                      ChoiceChip(
+                        label: const Text('اليوم'),
+                        selected: _isRange(today, today),
+                        onSelected: (_) => change(() {
+                          _f.from = today;
+                          _f.to = today;
+                        }),
+                      ),
+                      ChoiceChip(
+                        label: const Text('أمس'),
+                        selected: _isRange(yesterday, yesterday),
+                        onSelected: (_) => change(() {
+                          _f.from = yesterday;
+                          _f.to = yesterday;
+                        }),
+                      ),
+                      ChoiceChip(
+                        label: const Text('7 أيام'),
+                        selected: _isRange(week, today),
+                        onSelected: (_) => change(() {
+                          _f.from = week;
+                          _f.to = today;
+                        }),
+                      ),
+                      ChoiceChip(
+                        label: const Text('هذا الشهر'),
+                        selected: _isRange(month, today),
+                        onSelected: (_) => change(() {
+                          _f.from = month;
+                          _f.to = today;
+                        }),
+                      ),
+                      ChoiceChip(
+                        avatar: const Icon(Icons.edit_calendar, size: 16),
+                        label: Text(custom
+                            ? '${_f.from != null ? dayKey(_f.from!) : '...'} ← ${_f.to != null ? dayKey(_f.to!) : '...'}'
+                            : 'نطاق محدد'),
+                        selected: custom,
+                        onSelected: (_) async {
+                          await _pickRange();
+                          setSheet(() {});
+                        },
+                      ),
+                    ],
+                  ),
+                  if (presentTypes.isNotEmpty) ...[
+                    title('نوع العملية'),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        for (final ty in presentTypes)
+                          FilterChip(
+                            avatar: Icon(typeIcon(ty), size: 16),
+                            label: Text(ty.label),
+                            selected: _f.types.contains(ty),
+                            onSelected: (v) => change(() {
+                              if (v) {
+                                _f.types.add(ty);
+                              } else {
+                                _f.types.remove(ty);
+                              }
+                            }),
+                          ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.of(sheetCtx).pop(),
+                      child: const Text('عرض النتائج'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Rows that need the owner's attention: not counted yet, or without a
+  /// direction. They live in their own view so the main list stays clean.
+  bool _needsReview(Tx t) => t.review || t.isUnknown;
 
   @override
   Widget build(BuildContext context) {
-    final shown = txs.where((t) => filter.matches(t, accounts)).toList();
-    final totals = totalsOf(shown);
-    final reviewCount = shown.where((t) => t.review).length;
-    final reviewTotal = txs.where((t) => t.review).length;
-    final mismatchCount = shown.where((t) => mismatches.containsKey(t.id)).length;
-    final presentTypes =
-        TxType.values.where((ty) => txs.any((t) => t.type == ty)).toList();
+    final cs = Theme.of(context).colorScheme;
+    final matched =
+        widget.txs.where((t) => _f.matches(t, widget.accounts)).toList();
+    final reviewList = matched.where(_needsReview).toList();
+    final confirmed = matched.where((t) => !_needsReview(t)).toList();
+    final shown = _dir == null
+        ? confirmed
+        : confirmed.where((t) => t.dir == _dir).toList();
+    final totals = totalsOf(confirmed);
 
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final from = filter.from;
-    final to = filter.to;
-
+    final list = _review ? reviewList : shown;
     final groups = <String, List<Tx>>{};
-    for (final t in shown) {
+    for (final t in list) {
       groups.putIfAbsent(dayKeyTs(t.ts), () => []).add(t);
     }
     final items = <Object>[];
-    groups.forEach((day, list) {
-      items.add(_DayHeader(day, totalsOf(list)));
-      items.addAll(list);
+    groups.forEach((day, l) {
+      items.add(_DayHeader(day, totalsOf(l)));
+      items.addAll(l);
     });
 
-    Widget chipRow(List<Widget> chips) => SizedBox(
-          height: 46,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            children: [
-              for (final c in chips)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 3),
-                  child: c,
+    final toolbar = Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: _review
+          ? Row(
+              children: [
+                IconButton(
+                  tooltip: 'رجوع',
+                  onPressed: () => setState(() => _review = false),
+                  icon: const Icon(Icons.arrow_forward),
                 ),
+                Expanded(
+                  child: Text('تحتاج مراجعة (${reviewList.length})',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+              ],
+            )
+          : Row(
+              children: [
+                Expanded(
+                  child: SegmentedButton<int>(
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    segments: const [
+                      ButtonSegment(value: 0, label: Text('الكل')),
+                      ButtonSegment(value: 1, label: Text('داخل')),
+                      ButtonSegment(value: 2, label: Text('خارج')),
+                    ],
+                    selected: {
+                      _dir == null ? 0 : (_dir == Dir.inFlow ? 1 : 2),
+                    },
+                    onSelectionChanged: (s) => setState(() {
+                      final v = s.first;
+                      _dir = v == 0
+                          ? null
+                          : (v == 1 ? Dir.inFlow : Dir.outFlow);
+                    }),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                IconButton.filledTonal(
+                  tooltip: 'تصفية',
+                  onPressed: _openFilters,
+                  icon: Badge(
+                    isLabelVisible: _activeFilters > 0,
+                    label: Text('$_activeFilters'),
+                    child: const Icon(Icons.tune),
+                  ),
+                ),
+                if (reviewList.isNotEmpty)
+                  IconButton.filledTonal(
+                    tooltip: 'تحتاج مراجعة',
+                    onPressed: () => setState(() => _review = true),
+                    icon: Badge(
+                      label: Text('${reviewList.length}'),
+                      child: const Icon(Icons.rule),
+                    ),
+                  ),
+              ],
+            ),
+    );
+
+    Widget summaryCell(String label, String value, Color color) => Expanded(
+          child: Column(
+            children: [
+              Text(label,
+                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+              const SizedBox(height: 2),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(value,
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: color)),
+              ),
             ],
           ),
         );
 
+    final summary = _review
+        ? Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _orange.withAlpha(24),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Text(
+              'هذه الرسائل غير محسوبة في الداخل والخارج حتى تؤكدها. اضغط على '
+              'أي معاملة لتحديد نوعها واتجاهها، أو صنّفها بالذكاء الاصطناعي '
+              'من تبويب "الذكاء".',
+              style: TextStyle(fontSize: 12, color: _orange),
+            ),
+          )
+        : Container(
+            margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: [
+                summaryCell('داخل', fmt(totals.inSum), _green),
+                summaryCell('خارج', fmt(totals.outSum), _red),
+                summaryCell('الصافي', fmt(totals.net),
+                    totals.net < 0 ? _red : cs.onSurface),
+              ],
+            ),
+          );
+
     return Column(
       children: [
-        if (accounts.isNotEmpty)
-          chipRow([
-            ChoiceChip(
-              label: const Text('كل الأرقام'),
-              selected: filter.accountId == null,
-              onSelected: (_) {
-                filter.accountId = null;
-                onChanged();
-              },
-            ),
-            for (final a in accounts)
-              ChoiceChip(
-                label: Text(a.name),
-                selected: filter.accountId == a.id,
-                onSelected: (_) {
-                  filter.accountId = a.id;
-                  onChanged();
-                },
-              ),
-          ]),
-        if (presentTypes.isNotEmpty)
-          chipRow([
-            if (reviewTotal > 0)
-              FilterChip(
-                avatar: const Icon(Icons.rule, size: 16),
-                label: Text('تحتاج مراجعة ($reviewTotal)'),
-                selected: filter.reviewOnly,
-                onSelected: (v) {
-                  filter.reviewOnly = v;
-                  onChanged();
-                },
-              ),
-            for (final ty in presentTypes)
-              FilterChip(
-                avatar: Icon(typeIcon(ty), size: 16),
-                label: Text(ty.label),
-                selected: filter.types.contains(ty),
-                onSelected: (v) {
-                  if (v) {
-                    filter.types.add(ty);
-                  } else {
-                    filter.types.remove(ty);
-                  }
-                  onChanged();
-                },
-              ),
-          ]),
-        chipRow([
-          if (from != null || to != null)
-            InputChip(
-              avatar: const Icon(Icons.date_range, size: 16),
-              label: Text(
-                from != null && to != null
-                    ? '${dayKey(from)} ← ${dayKey(to)}'
-                    : '${from != null ? dayKey(from) : '...'} ← ${to != null ? dayKey(to) : '...'}',
-              ),
-              onDeleted: () => _setRange(null, null),
-            ),
-          ActionChip(
-            label: const Text('اليوم'),
-            onPressed: () => _setRange(today, today),
-          ),
-          ActionChip(
-            label: const Text('أمس'),
-            onPressed: () {
-              final y = DateTime(today.year, today.month, today.day - 1);
-              _setRange(y, y);
-            },
-          ),
-          ActionChip(
-            label: const Text('7 أيام'),
-            onPressed: () => _setRange(
-                DateTime(today.year, today.month, today.day - 6), today),
-          ),
-          ActionChip(
-            label: const Text('هذا الشهر'),
-            onPressed: () => _setRange(DateTime(now.year, now.month), today),
-          ),
-          ActionChip(
-            avatar: const Icon(Icons.edit_calendar, size: 16),
-            label: const Text('نطاق محدد'),
-            onPressed: () => _pickRange(context),
-          ),
-        ]),
-        Container(
-          width: double.infinity,
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('${totals.count} معاملة',
-                      style: const TextStyle(fontSize: 12)),
-                  Text('داخل ${fmt(totals.inSum)}',
-                      style: const TextStyle(color: _green, fontSize: 12)),
-                  Text('خارج ${fmt(totals.outSum)}',
-                      style: const TextStyle(color: _red, fontSize: 12)),
-                  Text('رسوم ${fmt(totals.fee)}',
-                      style: const TextStyle(fontSize: 12)),
-                ],
-              ),
-              if (reviewCount > 0 || totals.unknown > 0 || mismatchCount > 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    [
-                      if (reviewCount > 0)
-                        '$reviewCount تحتاج مراجعة (${fmt(totals.pendingSum)} غير محسوبة)',
-                      if (totals.unknown > 0)
-                        '${totals.unknown} بلا اتجاه (غير محسوبة)',
-                      if (mismatchCount > 0) '$mismatchCount رصيدها لا يطابق',
-                    ].join(' · '),
-                    style: const TextStyle(color: _orange, fontSize: 12),
-                  ),
-                ),
-            ],
-          ),
-        ),
+        toolbar,
+        summary,
         Expanded(
           child: items.isEmpty
-              ? const Center(child: Text('لا توجد معاملات مطابقة'))
+              ? RefreshIndicator(
+                  onRefresh: widget.onRefresh,
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      const SizedBox(height: 80),
+                      Icon(
+                        _review ? Icons.verified_outlined : Icons.inbox_outlined,
+                        size: 56,
+                        color: cs.outline,
+                      ),
+                      const SizedBox(height: 8),
+                      Center(
+                        child: Text(
+                          _review ? 'لا توجد معاملات تحتاج مراجعة' : 'لا توجد معاملات',
+                          style: TextStyle(color: cs.onSurfaceVariant),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
               : RefreshIndicator(
-                  onRefresh: onRefresh,
+                  onRefresh: widget.onRefresh,
                   child: ListView.builder(
+                    padding: const EdgeInsets.only(bottom: 16),
                     itemCount: items.length,
                     itemBuilder: (ctx, i) {
                       final it = items[i];
                       if (it is _DayHeader) return _header(context, it);
-                      return _tile(it as Tx);
+                      return _tile(context, it as Tx);
                     },
                   ),
                 ),
@@ -629,73 +839,134 @@ class TransactionsTab extends StatelessWidget {
   }
 
   Widget _header(BuildContext context, _DayHeader h) {
-    return Container(
-      color: Theme.of(context).colorScheme.surfaceContainerHigh,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+    final grey = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
       child: Row(
         children: [
           Expanded(
             child: Text(
               dayTitle(h.day),
-              style: const TextStyle(fontWeight: FontWeight.bold),
+              style: TextStyle(
+                  fontWeight: FontWeight.w600, fontSize: 12, color: grey),
             ),
           ),
-          Text('داخل ${fmt(h.totals.inSum)}',
-              style: const TextStyle(color: _green, fontSize: 12)),
-          const SizedBox(width: 10),
-          Text('خارج ${fmt(h.totals.outSum)}',
-              style: const TextStyle(color: _red, fontSize: 12)),
+          if (!_review) ...[
+            if (h.totals.inSum > 0)
+              Text('+${fmt(h.totals.inSum)}',
+                  style: const TextStyle(color: _green, fontSize: 12)),
+            if (h.totals.inSum > 0 && h.totals.outSum > 0)
+              const SizedBox(width: 10),
+            if (h.totals.outSum > 0)
+              Text('-${fmt(h.totals.outSum)}',
+                  style: const TextStyle(color: _red, fontSize: 12)),
+          ],
         ],
       ),
     );
   }
 
-  Widget _tile(Tx t) {
-    final color = t.review ? _orange : dirColor(t.dir);
-    final acc = accountFor(t, accounts);
+  Widget _tile(BuildContext context, Tx t) {
+    final cs = Theme.of(context).colorScheme;
+    final pending = _needsReview(t);
+    final color = pending ? _orange : dirColor(t.dir);
+    final acc = accountFor(t, widget.accounts);
     final sign = t.isIn ? '+' : (t.isOut ? '-' : '');
-    final mm = mismatches[t.id];
-    final lines = <String>[
-      '${t.type.label} · ${acc == null ? t.wallet : accountLabel(acc)} · ${timeOf(t.ts)}',
-      if (t.party != null) 'الطرف الآخر: ${t.party}',
-      if (t.fee > 0) 'رسوم: ${fmt(t.fee)}',
-      if (t.note.isNotEmpty) 'ملاحظة: ${t.note}',
-      if (t.ai && t.aiNote.isNotEmpty) '🤖 ${t.aiNote}',
-      if (t.review) '⚠ غير محسوبة حتى تراجعها (اضغط)',
-      if (mm != null) '⚠ الرصيد لا يطابق (فرق ${fmt(mm)})',
-    ];
-    return Column(
-      children: [
-        ListTile(
-          onTap: () => onTap(t),
-          leading: Icon(typeIcon(t.type), color: color),
-          title: Text(
-            '$sign${fmt(t.amount)} EGP${t.isUnknown ? '  (الاتجاه غير محدد)' : ''}',
-            style: TextStyle(color: color, fontWeight: FontWeight.w600),
-          ),
-          subtitle: Text(lines.join('\n')),
-          isThreeLine: lines.length > 2,
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (t.ai)
-                const Padding(
-                  padding: EdgeInsets.only(left: 4),
-                  child: Icon(Icons.auto_awesome, size: 18, color: _green),
-                ),
-              if (t.balance != null)
-                Text('رصيد ${fmt(t.balance!)}',
-                    style: const TextStyle(fontSize: 12)),
-              const SizedBox(width: 6),
-              Icon(
-                t.note.isEmpty ? Icons.edit_note : Icons.sticky_note_2,
-                size: 20,
+    final mm = widget.mismatches[t.id];
+    final icon = pending
+        ? Icons.help_outline
+        : (t.type == TxType.transfer
+            ? (t.isIn ? Icons.south_west : Icons.north_east)
+            : typeIcon(t.type));
+    final sub = <String>[
+      t.type.label,
+      acc == null ? t.wallet : accountLabel(acc),
+      timeOf(t.ts),
+    ].join(' · ');
+    final small = TextStyle(fontSize: 11, color: cs.onSurfaceVariant);
+
+    return InkWell(
+      onTap: () => widget.onTap(t),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 20,
+              backgroundColor: color.withAlpha(30),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    t.party ?? t.type.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 14),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(sub, style: small),
+                  if (t.note.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Row(
+                        children: [
+                          Icon(Icons.sticky_note_2_outlined,
+                              size: 12, color: cs.onSurfaceVariant),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(t.note,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: small),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (pending)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        t.ai && t.aiNote.isNotEmpty
+                            ? '🤖 ${t.aiNote}'
+                            : (t.isUnknown
+                                ? 'الاتجاه غير محدد · اضغط للتأكيد'
+                                : 'غير محسوبة · اضغط للتأكيد'),
+                        style: const TextStyle(fontSize: 11, color: _orange),
+                      ),
+                    ),
+                  if (mm != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text('⚠ الرصيد لا يطابق (فرق ${fmt(mm)})',
+                          style: const TextStyle(fontSize: 11, color: _orange)),
+                    ),
+                ],
               ),
-            ],
-          ),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '$sign${fmt(t.amount)}',
+                  style: TextStyle(
+                      color: color, fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+                if (t.fee > 0 && !pending)
+                  Text('رسوم ${fmt(t.fee)}', style: small),
+                if (t.balance != null)
+                  Text('رصيد ${fmt(t.balance!)}', style: small),
+              ],
+            ),
+          ],
         ),
-        const Divider(height: 1),
-      ],
+      ),
     );
   }
 }
