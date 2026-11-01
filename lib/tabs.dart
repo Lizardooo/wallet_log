@@ -932,10 +932,10 @@ class _TransactionsTabState extends State<TransactionsTab> {
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: small),
-                          ],
-                        ]),
+                           ),
+                         ],
+                       ),
                     ),
-                  ),
                   if (pending)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
