@@ -276,46 +276,39 @@ String normalizeDigits(String s) {
   return b.toString();
 }
 
+/// Trusted sender patterns per wallet provider. A message is a wallet message
+/// only when its sender matches; wording in the body is never enough, because a
+/// customer-written or phishing SMS can say anything. The body only picks
+/// between providers when the sender itself is shared (e.g. a generic "Cash").
+bool _trustedSender(String s) =>
+    s.contains('cash') ||
+    s.contains('instapay') ||
+    s.contains('fawry') ||
+    s.contains('vf') ||
+    s.contains('vodafone') ||
+    s.contains('orange') ||
+    s.contains('etisalat') ||
+    s.contains('e&');
+
 String? detectWallet(String sender, String body) {
   final s = sender.toLowerCase();
   final b = body.toLowerCase();
-  // Telecom and bank ads also mention Orange / Etisalat / Vodafone. A message
-  // counts as a wallet message only when the sender is a known wallet sender or
-  // the text itself talks about a wallet / cash account.
-  final walletSender = s.contains('cash') ||
-      s.contains('instapay') ||
-      s.contains('fawry') ||
-      s.contains('vf') ||
-      s.contains('vodafone') ||
-      s.contains('orange') ||
-      s.contains('etisalat') ||
-      s.contains('e&');
-  final walletText = RegExp(r'محفظ|كاش|wallet|cash|instapay|انستا|إنستا|فوري|fawry')
-      .hasMatch(b);
-  if (!walletSender && !walletText) return null;
-  if (s.contains('instapay') || b.contains('instapay') || b.contains('انستا')) {
+  if (!_trustedSender(s)) return null;
+  if (s.contains('instapay')) return 'InstaPay';
+  if (s.contains('orange')) return 'Orange Cash';
+  if (s.contains('vodafone') || s.contains('vf')) return 'Vodafone Cash';
+  if (s.contains('etisalat') || s.contains('e&') || s.contains('fawry')) {
+    return 'Etisalat Cash / Fawry';
+  }
+  // Generic "...cash" sender: let the body choose the provider.
+  if (b.contains('instapay') || b.contains('انستا') || b.contains('إنستا')) {
     return 'InstaPay';
   }
-  if (s.contains('orange') ||
-      b.contains('orange') ||
-      b.contains('اورنج') ||
-      b.contains('أورنج')) {
+  if (b.contains('orange') || b.contains('اورنج') || b.contains('أورنج')) {
     return 'Orange Cash';
   }
-  final vodafone = s.contains('vodafone') ||
-      s.contains('vf') ||
-      b.contains('vodafone') ||
-      b.contains('فودافون');
-  if (vodafone &&
-      (s.contains('cash') || b.contains('cash') || b.contains('كاش'))) {
-    return 'Vodafone Cash';
-  }
-  if (s.contains('etisalat') ||
-      s.contains('e&') ||
-      s.contains('fawry') ||
-      b.contains('etisalat') ||
-      b.contains('اتصالات') ||
-      b.contains('فوري') ||
+  if (b.contains('vodafone') || b.contains('فودافون')) return 'Vodafone Cash';
+  if (b.contains('etisalat') || b.contains('اتصالات') || b.contains('فوري') ||
       b.contains('fawry')) {
     return 'Etisalat Cash / Fawry';
   }

@@ -19,6 +19,10 @@ class ImportRow {
   final String note;
   final String body;
 
+  /// true when the direction could not be established from the file; the row
+  /// is stored for the owner's review and stays out of the totals.
+  final bool review;
+
   const ImportRow({
     required this.key,
     required this.ts,
@@ -30,6 +34,7 @@ class ImportRow {
     this.party,
     this.note = '',
     this.body = '',
+    this.review = false,
   });
 }
 
@@ -316,7 +321,12 @@ SheetImport _readSheet(String name, Sheet sheet) {
             '${cellAt(cells, _Field.time)} ${cellAt(cells, _Field.note)}') ??
         lastDate;
     if (date != null) lastDate = date;
-    final when = date ?? DateTime.now();
+    if (date == null) {
+      // An unknown date is never replaced by today's date.
+      skipped++;
+      continue;
+    }
+    final when = date;
     final ts = when.millisecondsSinceEpoch;
 
     final typeText = cellAt(cells, _Field.type);
@@ -325,7 +335,11 @@ SheetImport _readSheet(String name, Sheet sheet) {
     var dir = _dir(cellAt(cells, _Field.dir)) ??
         _dir(typeText) ??
         _defaultDir(type);
-    dir ??= amount < 0 ? Dir.outFlow : Dir.inFlow;
+    // Only an explicit negative sign is evidence of direction; a bare positive
+    // amount is never assumed to be income.
+    dir ??= amount < 0 ? Dir.outFlow : null;
+    final uncertain = dir == null;
+    dir ??= Dir.unknown;
 
     final fee = _money(cellAt(cells, _Field.fee))?.abs() ?? 0;
     final wallet = cellAt(cells, _Field.wallet);
@@ -343,6 +357,7 @@ SheetImport _readSheet(String name, Sheet sheet) {
       note: 'استيراد Excel · ${name.isEmpty ? 'صفحة' : name}'
           '${noteText.isEmpty ? '' : ' · $noteText'}',
       body: raw,
+      review: uncertain,
     ));
     if (preview.length < 4) {
       preview.add('${_dayText(when)} · ${type.label} · ${dir.label} · '

@@ -74,7 +74,9 @@ void main() {
 
     // The type column wins over words in the description.
     expect(rows[0].type, TxType.transfer);
-    expect(rows[0].dir, Dir.inFlow);
+    // A bare positive transfer has no evidence of direction: never income.
+    expect(rows[0].dir, Dir.unknown);
+    expect(rows[0].review, isTrue);
     expect(rows[0].amount, 1250.5);
     expect(rows[0].party, '01012345678');
     expect(day(0), DateTime(2026, 10, 1));
@@ -118,5 +120,15 @@ void main() {
       DateTime.fromMillisecondsSinceEpoch(rows[1].ts),
       DateTime(2026, 1, 5),
     );
+  });
+
+  test('a row with no date at all is skipped, not dated today', () {
+    final excel = Excel.createExcel();
+    final sheet = excel['ورقة'];
+    sheet.appendRow([TextCellValue('date'), TextCellValue('amount')]);
+    sheet.appendRow([TextCellValue(''), TextCellValue('20')]);
+    final s = readWorkbook(Uint8List.fromList(excel.encode()!)).sheets.first;
+    expect(s.rows, isEmpty);
+    expect(s.skipped, 1);
   });
 }

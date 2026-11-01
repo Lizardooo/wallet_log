@@ -146,4 +146,9 @@ void main() {
     expect(parseSms('Orange', 'باقة جديدة بـ 100 جنيه فقط مع اورنج، 20 جيجا'), isNull);
     expect(parseSms('Etisalat', 'جدد باقتك بمبلغ 50 جنيه واستمتع'), isNull);
   });
+
+  test('body wording alone never makes an unknown sender a wallet', () {
+    expect(parseSms('+201001234567', 'تم تحويل 500 جنيه من محفظة فودافون كاش'), isNull);
+    expect(parseSms('Shop', 'Your wallet cash transfer of 100 EGP'), isNull);
+  });
 }

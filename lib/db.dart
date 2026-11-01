@@ -521,7 +521,7 @@ class TxDb {
           'party': row.party,
           'balance': null,
           'sub_id': subId,
-          'review': 0,
+          'review': row.review ? 1 : 0,
           'manual': 1,
           'ai': 0,
           'ai_note': '',
