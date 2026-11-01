@@ -109,7 +109,7 @@ void main() {
           tester
               .widget<NavigationBar>(find.byType(NavigationBar))
               .selectedIndex,
-          5);
+          4);
     });
   }
 }
