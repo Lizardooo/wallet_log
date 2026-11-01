@@ -4,6 +4,18 @@ import 'package:sqflite/sqflite.dart';
 import 'importer.dart';
 import 'exclusions.dart';
 import 'parser.dart';
+import 'money_engine.dart';
+import 'schema.dart';
+import 'confirmation_rules.dart';
+import 'wallet_store.dart';
+import 'ledger_service.dart';
+import 'evidence_service.dart';
+import 'ai_suggestions.dart';
+import 'match_service.dart';
+import 'summary_service.dart';
+import 'dart:io';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path_provider/path_provider.dart';
 
 class Tx {
   final int id;
@@ -26,6 +38,13 @@ class Tx {
   final int? exclusionRuleId;
   final bool ruleExempt;
 
+  /// Set on a reversal record: the transaction it reverses.
+  final int? reversalOf;
+
+  /// true when a reversal record exists for this transaction.
+  final bool reversed;
+  final String source;
+
   const Tx({
     required this.id,
     required this.ts,
@@ -46,6 +65,9 @@ class Tx {
     this.disposition = TxDisposition.active,
     this.exclusionRuleId,
     this.ruleExempt = false,
+    this.reversalOf,
+    this.reversed = false,
+    this.source = 'sms',
   });
 
   bool get isExcluded => disposition != TxDisposition.active;
@@ -83,8 +105,7 @@ class Account {
 /// numbers the owner chose. A message is rejected only when every selected
 /// number of this wallet has a known SIM and none matches; when the receiving
 /// SIM or an account's SIM is unknown, it is kept for that wallet type.
-bool smsBelongsToAccounts(
-    String wallet, int? subId, List<Account> accounts) {
+bool smsBelongsToAccounts(String wallet, int? subId, List<Account> accounts) {
   final sameWallet = accounts.where((a) => a.wallet == wallet).toList();
   if (sameWallet.isEmpty) return false;
   if (subId == null) return true;
@@ -161,86 +182,32 @@ class TxDb {
   static const settingsModel = 'gemini_model';
   static const settingsOwnerPhone = 'owner_phone';
 
-  static Future<void> _create(Database d) async {
-    await d.execute(
-      'CREATE TABLE IF NOT EXISTS tx('
-      'id INTEGER PRIMARY KEY AUTOINCREMENT, '
-      'k TEXT UNIQUE, ts INTEGER, wallet TEXT, dir TEXT, '
-      "type TEXT NOT NULL DEFAULT 'other', "
-      'amount REAL, fee REAL NOT NULL DEFAULT 0, party TEXT, balance REAL, '
-      'sub_id INTEGER, review INTEGER NOT NULL DEFAULT 0, '
-      'manual INTEGER NOT NULL DEFAULT 0, '
-      'ai INTEGER NOT NULL DEFAULT 0, '
-      "ai_note TEXT NOT NULL DEFAULT '', "
-      "note TEXT NOT NULL DEFAULT '', body TEXT, "
-      "disposition TEXT NOT NULL DEFAULT 'active', "
-      'rule_exempt INTEGER NOT NULL DEFAULT 0)',
-    );
-    await d.execute(
-      'CREATE TABLE IF NOT EXISTS exclusion_rules('
-      'id INTEGER PRIMARY KEY AUTOINCREMENT, wallet TEXT NOT NULL, '
-      'match_mode TEXT NOT NULL, pattern TEXT NOT NULL, '
-      'UNIQUE(wallet, match_mode, pattern))',
-    );
-    await d.execute(
-      'CREATE TABLE IF NOT EXISTS accounts('
-      'id INTEGER PRIMARY KEY AUTOINCREMENT, '
-      'name TEXT, wallet TEXT, number TEXT, sub_id INTEGER, slot INTEGER)',
-    );
-    await d.execute(
-      'CREATE TABLE IF NOT EXISTS openings('
-      'account_id INTEGER, day TEXT, amount REAL, '
-      'PRIMARY KEY(account_id, day))',
-    );
-    await d.execute(
-      'CREATE TABLE IF NOT EXISTS settings('
-      'key TEXT PRIMARY KEY, value TEXT NOT NULL)',
-    );
-  }
-
-  /// Adds a column when an older database does not have it yet.
-  static Future<void> _addColumn(
-      Database d, String table, String column, String decl) async {
-    final cols = await d.rawQuery('PRAGMA table_info($table)');
-    if (cols.any((c) => c['name'] == column)) return;
-    await d.execute('ALTER TABLE $table ADD COLUMN $column $decl');
-  }
+  /// '1' = keep SMS from unknown senders that look like wallet messages in a
+  /// review inbox (off by default).
+  static const settingsStoreCandidates = 'store_unknown_candidates';
 
   static Future<Database> get _database async {
-    return _db ??= await openDatabase(
-      join(await getDatabasesPath(), 'wallet.db'),
-      version: 5,
-      onCreate: (d, v) => _create(d),
-      onUpgrade: (d, oldV, newV) async {
-        if (oldV < 2) {
-          // v1 had no notes or SIM info; messages are re-read from the inbox.
-          await d.execute('DROP TABLE IF EXISTS tx');
-        }
-        await _create(d);
-        if (oldV == 2) {
-          await d.execute("ALTER TABLE tx ADD COLUMN type TEXT NOT NULL DEFAULT 'other'");
-          await d.execute('ALTER TABLE tx ADD COLUMN fee REAL NOT NULL DEFAULT 0');
-          await d.execute('ALTER TABLE tx ADD COLUMN review INTEGER NOT NULL DEFAULT 0');
-          await d.execute('ALTER TABLE tx ADD COLUMN manual INTEGER NOT NULL DEFAULT 0');
-          // Switch the duplicate-detection key to the stable hash; notes are kept.
-          final rows = await d.query('tx', columns: ['id', 'ts', 'body']);
-          for (final r in rows) {
-            await d.update(
-              'tx',
-              {'k': smsKey((r['body'] as String?) ?? '', (r['ts'] as int?) ?? 0)},
-              where: 'id = ?',
-              whereArgs: [r['id']],
-            );
-          }
-        }
-        // v4: model classification and the setup wizard's SIM slot.
-        await _addColumn(d, 'tx', 'ai', 'INTEGER NOT NULL DEFAULT 0');
-        await _addColumn(d, 'tx', 'ai_note', "TEXT NOT NULL DEFAULT ''");
-        await _addColumn(d, 'accounts', 'slot', 'INTEGER');
-        await _addColumn(d, 'tx', 'disposition', "TEXT NOT NULL DEFAULT 'active'");
-        await _addColumn(d, 'tx', 'rule_exempt', 'INTEGER NOT NULL DEFAULT 0');
+    if (_db != null) return _db!;
+    final path = join(await getDatabasesPath(), 'wallet.db');
+    // A restorable copy of the file is taken before any schema upgrade.
+    await backupBeforeMigration(path, schemaVersion);
+    final opened = await openDatabase(
+      path,
+      version: schemaVersion,
+      onConfigure: (d) => d.execute('PRAGMA foreign_keys = ON'),
+      onCreate: (d, v) async {
+        await createCore(d);
+        await applyV6(d, 0);
+        await applyV7(d);
+        await applyV8(d);
+        await applyV9(d);
       },
+      onUpgrade: migrate,
     );
+    // Wallets made by the setup wizard exist only as legacy accounts until now.
+    await syncLegacyAccounts(opened);
+    await autoLinkTransactions(opened);
+    return _db = opened;
   }
 
   /// Parses and stores messages. Non-transactions and duplicates are ignored, so
@@ -255,14 +222,31 @@ class TxDb {
     final db = await _database;
     final batch = db.batch();
     final rules = await _rules(db);
-    final chosen =
-        accounts != null && accounts.isNotEmpty ? accounts : null;
+    final chosen = accounts != null && accounts.isNotEmpty ? accounts : null;
+    final keepCandidates = (await setting(settingsStoreCandidates)) == '1';
     for (final m in msgs) {
       final p = parseSms(m.sender, m.body);
       final key = smsKey(m.body, m.ts);
       final wallet = p?.wallet ?? detectWallet(m.sender, m.body);
-      final rule = wallet == null ? null
-          : matchingExclusionRule(rules, wallet, m.body);
+      if (wallet == null &&
+          keepCandidates &&
+          isWalletCandidate(m.sender, m.body)) {
+        // Opt-in only, and never turned into a transaction automatically.
+        batch.insert(
+          'sms_candidates',
+          {
+            'k': key,
+            'sender': m.sender,
+            'body': m.body,
+            'ts': m.ts,
+            'sub_id': m.subId,
+            'created_at': DateTime.now().millisecondsSinceEpoch,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+      final rule =
+          wallet == null ? null : matchingExclusionRule(rules, wallet, m.body);
       if (p == null) {
         // Do not fabricate a transaction for a message the parser rejected.
         // Retain previously archived matches and deliberate owner decisions.
@@ -270,14 +254,14 @@ class TxDb {
           batch.delete(
             'tx',
             where: "k = ? AND manual = 0 AND ai = 0 AND note = '' "
-                "AND disposition = 'active' AND rule_exempt = 0",
+                "AND disposition = 'active' AND rule_exempt = 0"
+                " AND id NOT IN (SELECT tx_id FROM audit_events)",
             whereArgs: [key],
           );
         }
         continue;
       }
-      if (chosen != null &&
-          !smsBelongsToAccounts(wallet!, m.subId, chosen)) {
+      if (chosen != null && !smsBelongsToAccounts(wallet!, m.subId, chosen)) {
         continue;
       }
       final dirStr = dirString(p.dir);
@@ -293,9 +277,26 @@ class TxDb {
           'fee': p.fee,
           'party': p.party,
           'balance': p.balance,
+          'amount_minor': exactMinor(p.amount),
+          'fee_minor': exactMinor(p.fee),
+          'balance_minor': exactMinor(p.balance),
           'sub_id': m.subId,
           'review': (rule != null || p.review) ? 1 : 0,
           'body': m.body,
+          'reference': extractReference(m.body),
+          // Only a message that reports a completed transaction counts.
+          'confirmation': switch (classifySmsCompletion(m.body)) {
+            SmsOutcome.completed => Confirmation.providerConfirmed,
+            SmsOutcome.failed => Confirmation.failed,
+            _ => Confirmation.awaiting,
+          },
+          'confirmation_method':
+              classifySmsCompletion(m.body) == SmsOutcome.completed
+                  ? ConfirmMethod.smsContent
+                  : null,
+          'confirmed_at': classifySmsCompletion(m.body) == SmsOutcome.completed
+              ? m.ts
+              : null,
         },
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
@@ -309,26 +310,39 @@ class TxDb {
           'fee': p.fee,
           'party': p.party,
           'balance': p.balance,
+          'amount_minor': exactMinor(p.amount),
+          'fee_minor': exactMinor(p.fee),
+          'balance_minor': exactMinor(p.balance),
           'review': (rule != null || p.review) ? 1 : 0,
         },
-        where: "k = ? AND manual = 0 AND ai = 0 AND disposition = 'active' AND rule_exempt = 0",
+        where:
+            "k = ? AND manual = 0 AND ai = 0 AND disposition = 'active' AND rule_exempt = 0"
+            " AND id NOT IN (SELECT tx_id FROM audit_events)",
         whereArgs: [key],
       );
     }
     await batch.commit(noResult: true);
+    // A delayed SMS may belong to a record typed in by hand: only suggest.
+    await autoLinkTransactions(db);
+    await MatchService(db).suggestAll();
   }
 
   static Future<List<Tx>> allTx() async {
     final db = await _database;
     final rows = await db.query('tx', orderBy: 'ts DESC, id DESC');
     final rules = await _rules(db);
+    final reversedIds = {
+      for (final r in rows)
+        if (r['reverses_tx_id'] != null) r['reverses_tx_id'] as int
+    };
     return rows.map((r) {
       final typeStr = r['type'] as String?;
       final stored = dispositionFromString(r['disposition'] as String?);
       final exempt = (r['rule_exempt'] as int?) == 1;
       final rule = stored == TxDisposition.active && !exempt
           ? matchingExclusionRule(rules, (r['wallet'] as String?) ?? '',
-              (r['body'] as String?) ?? '') : null;
+              (r['body'] as String?) ?? '')
+          : null;
       return Tx(
         id: r['id'] as int,
         ts: r['ts'] as int,
@@ -349,7 +363,16 @@ class TxDb {
         manual: (r['manual'] as int?) == 1,
         ai: (r['ai'] as int?) == 1,
         aiNote: (r['ai_note'] as String?) ?? '',
-        disposition: rule == null ? stored : TxDisposition.ignored,
+        // A reversed transaction and its reversal record net to zero: both
+        // stay visible but are kept out of every total.
+        disposition: (rule != null ||
+                r['reverses_tx_id'] != null ||
+                reversedIds.contains(r['id']))
+            ? TxDisposition.ignored
+            : stored,
+        reversalOf: r['reverses_tx_id'] as int?,
+        reversed: reversedIds.contains(r['id']),
+        source: (r['source'] as String?) ?? 'sms',
         exclusionRuleId: rule?.id,
         ruleExempt: exempt,
       );
@@ -358,7 +381,24 @@ class TxDb {
 
   static Future<void> setNote(int id, String note) async {
     final db = await _database;
-    await db.update('tx', {'note': note}, where: 'id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      final rows = await txn.query('tx',
+          columns: ['note'], where: 'id = ?', whereArgs: [id]);
+      if (rows.isEmpty) return;
+      if (rows.first['note'] != note) {
+        final g = await startAuditGroup(
+            txn, 'correction', id, AuditSource.manual, '');
+        await writeAudit(txn,
+            txId: id,
+            event: 'correct',
+            field: 'note',
+            oldValue: rows.first['note'],
+            newValue: note,
+            source: AuditSource.manual,
+            groupId: g);
+      }
+      await txn.update('tx', {'note': note}, where: 'id = ?', whereArgs: [id]);
+    });
   }
 
   /// The owner's correction of type and direction; it is never overwritten.
@@ -368,9 +408,35 @@ class TxDb {
       final rows = await txn.query('tx', where: 'id = ?', whereArgs: [id]);
       final rules = await _rules(txn);
       if (rows.isEmpty || _excluded(rows.first, rules)) return;
-      await txn.update('tx', {
-        'type': type.name, 'dir': dirString(dir), 'review': 0, 'manual': 1,
-      }, where: 'id = ?', whereArgs: [id]);
+      final old = rows.first;
+      final changed = {
+        if (old['type'] != type.name) 'type': (old['type'], type.name),
+        if (old['dir'] != dirString(dir)) 'dir': (old['dir'], dirString(dir)),
+      };
+      if (changed.isNotEmpty) {
+        final g = await startAuditGroup(
+            txn, 'correction', id, AuditSource.manual, '');
+        for (final e in changed.entries) {
+          await writeAudit(txn,
+              txId: id,
+              event: 'correct',
+              field: e.key,
+              oldValue: e.value.$1,
+              newValue: e.value.$2,
+              source: AuditSource.manual,
+              groupId: g);
+        }
+      }
+      await txn.update(
+          'tx',
+          {
+            'type': type.name,
+            'dir': dirString(dir),
+            'review': 0,
+            'manual': 1,
+          },
+          where: 'id = ?',
+          whereArgs: [id]);
     });
   }
 
@@ -381,19 +447,36 @@ class TxDb {
     return db.transaction<Set<int>>((txn) async {
       final rules = await _rules(txn);
       final rows = await txn.query('tx');
-      final allowed = {for (final r in rows)
-        if (r['manual'] != 1 && !_excluded(r, rules)) r['id'] as int};
-      final batch = txn.batch();
+      final byId = {for (final r in rows) r['id'] as int: r};
+      final allowed = {
+        for (final r in rows)
+          if (r['manual'] != 1 && !_excluded(r, rules)) r['id'] as int
+      };
+      final saved = <int>{};
       for (final u in updates) {
         if (!allowed.contains(u.id)) continue;
-        batch.update('tx', {
-          'type': u.type.name, 'dir': dirString(u.dir),
-          'review': u.confirm ? 0 : 1, 'ai': 1, 'ai_note': u.note,
-        }, where: "id = ? AND manual = 0 AND disposition = 'active'",
-          whereArgs: [u.id]);
+        final row = byId[u.id]!;
+        // The model only suggests: the row keeps its parsed values and stays
+        // in review until the owner accepts the stored suggestion.
+        await txn.update('tx', {'ai_note': u.note, 'review': 1},
+            where: "id = ? AND manual = 0 AND disposition = 'active'",
+            whereArgs: [u.id]);
+        await AiSuggestionService.storeOn(txn,
+            txId: u.id,
+            kind: AiKind.classify,
+            action: 'classify',
+            reason: u.note,
+            payload: {
+              'type': u.type.name,
+              'dir': dirString(u.dir),
+              'confident': u.confirm
+            },
+            confidence: u.confirm ? 0.9 : 0.4,
+            inputHash:
+                aiInputHash((row['body'] as String?) ?? '', kind: '${u.id}'));
+        saved.add(u.id);
       }
-      await batch.commit(noResult: true);
-      return {for (final u in updates) if (allowed.contains(u.id)) u.id};
+      return saved;
     });
   }
 
@@ -401,35 +484,51 @@ class TxDb {
   /// while another AI request runs is not sent in a later batch.
   static Future<List<Tx>> classificationBatch(Iterable<int> ids) async {
     final current = {for (final t in await allTx()) t.id: t};
-    return [for (final id in ids)
-      if (current[id] != null && !current[id]!.isExcluded) current[id]!];
+    return [
+      for (final id in ids)
+        if (current[id] != null && !current[id]!.isExcluded) current[id]!
+    ];
   }
 
   static bool _excluded(Map<String, Object?> row, List<ExclusionRule> rules) =>
-      dispositionFromString(row['disposition'] as String?) != TxDisposition.active ||
-      (row['rule_exempt'] != 1 && matchingExclusionRule(rules,
-        (row['wallet'] as String?) ?? '', (row['body'] as String?) ?? '') != null);
+      dispositionFromString(row['disposition'] as String?) !=
+          TxDisposition.active ||
+      (row['rule_exempt'] != 1 &&
+          matchingExclusionRule(rules, (row['wallet'] as String?) ?? '',
+                  (row['body'] as String?) ?? '') !=
+              null);
 
   static Future<List<ExclusionRule>> _rules(DatabaseExecutor db) async {
     final rows = await db.query('exclusion_rules', orderBy: 'id');
-    return [for (final r in rows) ExclusionRule(
-      id: r['id'] as int, wallet: r['wallet'] as String,
-      match: r['match_mode'] == 'contains' ? ExclusionMatch.contains : ExclusionMatch.exact,
-      text: r['pattern'] as String)];
+    return [
+      for (final r in rows)
+        ExclusionRule(
+            id: r['id'] as int,
+            wallet: r['wallet'] as String,
+            match: r['match_mode'] == 'contains'
+                ? ExclusionMatch.contains
+                : ExclusionMatch.exact,
+            text: r['pattern'] as String)
+    ];
   }
 
-  static Future<List<ExclusionRule>> exclusionRules() async => _rules(await _database);
+  static Future<List<ExclusionRule>> exclusionRules() async =>
+      _rules(await _database);
 
   /// Store a deliberate decision separately from parser/manual/AI provenance.
   /// A future rule applies retroactively and to new matching messages.
-  static Future<void> exclude(int id, TxDisposition disposition, {
-    ExclusionMatch? match, String? text,
+  static Future<void> exclude(
+    int id,
+    TxDisposition disposition, {
+    ExclusionMatch? match,
+    String? text,
   }) async {
     if (disposition == TxDisposition.active) {
       throw ArgumentError('Use restoreToReview to restore a message');
     }
     final pattern = normalizeExclusionText(text ?? '');
-    if (match != null && (disposition != TxDisposition.ignored || pattern.isEmpty)) {
+    if (match != null &&
+        (disposition != TxDisposition.ignored || pattern.isEmpty)) {
       throw ArgumentError('A non-empty rule requires the ignored state');
     }
     final db = await _database;
@@ -439,12 +538,18 @@ class TxDb {
       if (match != null) {
         final wallet = (rows.first['wallet'] as String?) ?? '';
         if (wallet.isEmpty) throw ArgumentError('A wallet is required');
-        await txn.insert('exclusion_rules', {
-          'wallet': wallet, 'match_mode': match.name, 'pattern': pattern,
-        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+        await txn.insert(
+            'exclusion_rules',
+            {
+              'wallet': wallet,
+              'match_mode': match.name,
+              'pattern': pattern,
+            },
+            conflictAlgorithm: ConflictAlgorithm.ignore);
       }
-      await txn.update('tx', {'disposition': disposition.name, 'rule_exempt': 0},
-        where: 'id = ?', whereArgs: [id]);
+      await txn.update(
+          'tx', {'disposition': disposition.name, 'rule_exempt': 0},
+          where: 'id = ?', whereArgs: [id]);
     });
   }
 
@@ -452,9 +557,15 @@ class TxDb {
   /// from text rules until its owner explicitly excludes it again.
   static Future<void> restoreToReview(int id) async {
     final db = await _database;
-    await db.update('tx', {
-      'disposition': TxDisposition.active.name, 'review': 1, 'rule_exempt': 1,
-    }, where: 'id = ?', whereArgs: [id]);
+    await db.update(
+        'tx',
+        {
+          'disposition': TxDisposition.active.name,
+          'review': 1,
+          'rule_exempt': 1,
+        },
+        where: 'id = ?',
+        whereArgs: [id]);
   }
 
   static Future<void> deleteExclusionRule(int id) async {
@@ -464,17 +575,21 @@ class TxDb {
       final selected = rules.where((r) => r.id == id).toList();
       if (selected.isEmpty) return;
       final rows = await txn.query('tx',
-        where: "disposition = 'active' AND rule_exempt = 0");
+          where: "disposition = 'active' AND rule_exempt = 0");
       final batch = txn.batch();
       for (final row in rows) {
-        if (selected.single.matches((row['wallet'] as String?) ?? '',
-            (row['body'] as String?) ?? '')) {
+        if (selected.single.matches(
+            (row['wallet'] as String?) ?? '', (row['body'] as String?) ?? '')) {
           final another = matchingExclusionRule(rules.where((r) => r.id != id),
-            (row['wallet'] as String?) ?? '', (row['body'] as String?) ?? '');
-          batch.update('tx', {
-            'review': 1,
-            if (another == null) 'rule_exempt': 1,
-          }, where: 'id = ?', whereArgs: [row['id']]);
+              (row['wallet'] as String?) ?? '', (row['body'] as String?) ?? '');
+          batch.update(
+              'tx',
+              {
+                'review': 1,
+                if (another == null) 'rule_exempt': 1,
+              },
+              where: 'id = ?',
+              whereArgs: [row['id']]);
         }
       }
       batch.delete('exclusion_rules', where: 'id = ?', whereArgs: [id]);
@@ -505,9 +620,9 @@ class TxDb {
       present.add(row.key);
       final fromFile =
           row.wallet.isNotEmpty && row.wallet != excelWalletFallback;
-      final wallet =
-          fromFile ? row.wallet : (account?.wallet ?? row.wallet);
+      final wallet = fromFile ? row.wallet : (account?.wallet ?? row.wallet);
       final subId = fromFile ? null : account?.subId;
+      final hasWallet = fromFile || account != null;
       batch.insert(
         'tx',
         {
@@ -518,10 +633,15 @@ class TxDb {
           'type': row.type.name,
           'amount': row.amount,
           'fee': row.fee,
+          'amount_minor': exactMinor(row.amount),
+          'fee_minor': exactMinor(row.fee),
           'party': row.party,
           'balance': null,
           'sub_id': subId,
-          'review': row.review ? 1 : 0,
+          'source': 'excel',
+          'date_inferred': row.dateInferred ? 1 : 0,
+          // No wallet chosen: keep the row but never guess one.
+          'review': (row.review || row.dateInferred || !hasWallet) ? 1 : 0,
           'manual': 1,
           'ai': 0,
           'ai_note': '',
@@ -535,6 +655,42 @@ class TxDb {
     await batch.commit(noResult: true);
     return added;
   }
+
+  /// Wallet model access (owners, devices, SIMs, providers, wallet accounts).
+  static Future<WalletStore> wallets() async => WalletStore(await _database);
+
+  /// Audited corrections, reversals and manual entries.
+  static Future<LedgerService> ledger() async => LedgerService(await _database);
+
+  /// Private, persistent app storage (not gallery/cache) for evidence files.
+  static Future<String> dbPath() async =>
+      join(await getDatabasesPath(), 'wallet.db');
+
+  static Future<Directory> storageRoot() => getApplicationSupportDirectory();
+
+  static Future<EvidenceService> evidence() async =>
+      EvidenceService(await _database, await storageRoot());
+
+  static Future<ConfirmationService> confirmations() async =>
+      ConfirmationService(await _database);
+
+  static Future<MatchService> matches() async => MatchService(await _database);
+
+  static Future<SummaryService> summary() async =>
+      SummaryService(await _database);
+
+  static Future<Database> database() => _database;
+
+  static Future<AiSuggestionService> aiSuggestions() async =>
+      AiSuggestionService(await _database);
+
+  static Future<ConfirmedTotals> totals() async =>
+      ConfirmedTotals(await _database);
+
+  /// Pending unknown-sender candidates for the owner to look at.
+  static Future<List<Map<String, Object?>>> candidates() async =>
+      (await _database).query('sms_candidates',
+          where: "status = 'pending'", orderBy: 'ts DESC');
 
   static Future<List<Account>> accounts() async {
     final db = await _database;
@@ -565,12 +721,15 @@ class TxDb {
     } else {
       await db.update('accounts', values, where: 'id = ?', whereArgs: [a.id]);
     }
+    await syncLegacyAccounts(db);
+    await autoLinkTransactions(db);
   }
 
   static Future<void> deleteAccount(int id) async {
     final db = await _database;
     await db.delete('accounts', where: 'id = ?', whereArgs: [id]);
     await db.delete('openings', where: 'account_id = ?', whereArgs: [id]);
+    await syncLegacyAccounts(db); // archives the mirrored wallet; history stays
   }
 
   /// Opening balances keyed by "<accountId>|<yyyy-mm-dd>".
@@ -579,11 +738,13 @@ class TxDb {
     final rows = await db.query('openings');
     return {
       for (final r in rows)
-        '${r['account_id']}|${r['day']}': ((r['amount'] as num?) ?? 0).toDouble(),
+        '${r['account_id']}|${r['day']}':
+            ((r['amount'] as num?) ?? 0).toDouble(),
     };
   }
 
-  static Future<void> setOpening(int accountId, String day, double amount) async {
+  static Future<void> setOpening(
+      int accountId, String day, double amount) async {
     final db = await _database;
     await db.insert(
       'openings',
@@ -598,6 +759,43 @@ class TxDb {
     return {
       for (final r in rows) (r['key'] as String): (r['value'] as String?) ?? '',
     };
+  }
+
+  /// The Gemini key lives in the platform keystore, not in the database (so it
+  /// is not in backups or file copies). Falls back to the settings table only
+  /// where no keystore exists (tests); an older key there is moved on first read.
+  static Future<String> apiKey() async {
+    const store = FlutterSecureStorage();
+    try {
+      final v = await store.read(key: settingsApiKey);
+      if (v != null && v.isNotEmpty) return v;
+      final old = await setting(settingsApiKey);
+      if (old != null && old.isNotEmpty) {
+        await store.write(key: settingsApiKey, value: old);
+        // Only drop the old copy once the keystore really returns the same key.
+        if (await store.read(key: settingsApiKey) == old) {
+          await deleteSetting(settingsApiKey);
+        }
+        return old;
+      }
+      return '';
+    } catch (_) {
+      return await setting(settingsApiKey) ?? '';
+    }
+  }
+
+  static Future<void> setApiKey(String key) async {
+    const store = FlutterSecureStorage();
+    try {
+      await store.write(key: settingsApiKey, value: key);
+      if (await store.read(key: settingsApiKey) == key) {
+        await deleteSetting(settingsApiKey);
+      } else {
+        throw StateError('keystore did not keep the key');
+      }
+    } catch (_) {
+      await setSetting(settingsApiKey, key);
+    }
   }
 
   static Future<String?> setting(String key) async {

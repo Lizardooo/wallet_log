@@ -11,6 +11,11 @@ import 'exclusions.dart';
 import 'review_actions.dart';
 import 'review_strings.dart';
 import 'review_tab.dart';
+import 'add_tx_screen.dart';
+import 'dashboard_tab.dart';
+import 'settings_screen.dart';
+import 'tx_detail_screen.dart';
+import 'suggestions_screen.dart';
 
 void main() => runApp(const WalletLogApp());
 
@@ -53,7 +58,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Map<int, double> _mismatch = {};
   final TxFilter _filter = TxFilter();
   final TxFilter _reportFilter = TxFilter(period: DatePeriod.thisMonth);
-  int _tab = 0;
+  int _tab = 5;
+  int _dashRefresh = 0;
   bool _denied = false;
   bool _scanning = false;
   bool _ready = false;
@@ -66,6 +72,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     'الحسابات',
     'الذكاء الاصطناعي',
     'المراجعة',
+    'الرئيسية',
   ];
 
   @override
@@ -86,7 +93,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _reload();
     if (!mounted) return;
     // The owner finished (or skipped) the wizard: show the reports first.
-    setState(() => _tab = 1);
+    setState(() => _tab = 5);
     await _scan();
   }
 
@@ -126,6 +133,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _mismatch = mismatch;
       _setupDone = settings[TxDb.settingsSetupDone] == '1';
       _ready = true;
+      _dashRefresh++;
     });
   }
 
@@ -207,7 +215,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final decision = await showExclusionDialog(context, t, _txs);
     if (decision == null) return;
     await TxDb.exclude(t.id, decision.disposition,
-      match: decision.match, text: decision.text);
+        match: decision.match, text: decision.text);
     if (note != null && note != t.note) await TxDb.setNote(t.id, note);
     await _reload();
   }
@@ -225,6 +233,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (action == ExcludedMessageAction.change) await _excludeTx(t);
       return;
     }
+    final go = await Navigator.push<String>(
+        context, MaterialPageRoute(builder: (_) => TxDetailScreen(txId: t.id)));
+    await _reload();
+    if (go != 'edit' || !mounted) return;
     final r = await showTxDialog(context, t, _mismatch[t.id]);
     if (r == null || !mounted) return;
     if (r.exclude) {
@@ -254,23 +266,48 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           padding: const EdgeInsets.all(8),
           child: Image.asset('assets/logo.png'),
         ),
-        title: Text('أموالي · ${_tab == 4 ? reviewText(context, 'المراجعة', 'Review') : _titles[_tab]}',
-          maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(
+            'أموالي · ${_tab == 4 ? reviewText(context, 'المراجعة', 'Review') : _titles[_tab]}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: reviewText(
+                context, 'الإعدادات والنسخ الاحتياطي', 'Settings & backup'),
+            onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => SettingsScreen(onRestored: () async {
+                          await _reload();
+                          if (mounted) setState(() => _dashRefresh++);
+                        }))),
+          ),
+          IconButton(
+            icon: const Icon(Icons.lightbulb_outline),
+            tooltip: reviewText(context, 'الاقتراحات', 'Suggestions'),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const SuggestionsScreen())),
+          ),
           IconButton(
             icon: const Icon(Icons.download),
             tooltip: 'تصدير تقرير Excel',
-            onPressed: _tab == 4 ? null : () => exportExcelReport(
-              context,
-              txs: _tab == 0
-                  ? _txs.where((t) => _filter.matches(t, _accounts)).toList()
-                  : _tab == 1
-                      ? _txs
-                          .where((t) => _reportFilter.matchesBase(t, _accounts))
-                          .toList()
-                      : _txs,
-              accounts: _accounts,
-            ),
+            onPressed: _tab == 4
+                ? null
+                : () => exportExcelReport(
+                      context,
+                      txs: _tab == 0
+                          ? _txs
+                              .where((t) => _filter.matches(t, _accounts))
+                              .toList()
+                          : _tab == 1
+                              ? _txs
+                                  .where((t) =>
+                                      _reportFilter.matchesBase(t, _accounts))
+                                  .toList()
+                              : _txs,
+                      accounts: _accounts,
+                    ),
           ),
           IconButton(
             icon: const Icon(Icons.upload_file),
@@ -334,22 +371,44 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 AiTab(txs: _txs, onChanged: _reload),
                 ReviewTab(
-                  txs: _txs, accounts: _accounts, rules: _exclusionRules,
-                  onOpen: _openTx, onExclude: _excludeTx, onRestore: _restoreTx,
+                  txs: _txs,
+                  accounts: _accounts,
+                  rules: _exclusionRules,
+                  onOpen: _openTx,
+                  onExclude: _excludeTx,
+                  onRestore: _restoreTx,
                   onDeleteRule: (rule) async {
                     await TxDb.deleteExclusionRule(rule.id);
                     await _reload();
                   },
                 ),
+                DashboardTab(refresh: _dashRefresh),
               ],
             ),
+      floatingActionButton: (_tab == 0 || _tab == 5)
+          ? FloatingActionButton.extended(
+              icon: const Icon(Icons.add),
+              label:
+                  Text(reviewText(context, 'تسجيل معاملة', 'Add transaction')),
+              onPressed: () async {
+                await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AddTransactionScreen()));
+                await _reload();
+                if (mounted) setState(() => _dashRefresh++);
+              },
+            )
+          : null,
       bottomNavigationBar: NavigationBar(
         labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
         destinations: [
-          const NavigationDestination(icon: Icon(Icons.list_alt), label: 'المعاملات'),
-          const NavigationDestination(icon: Icon(Icons.bar_chart), label: 'التقارير'),
+          const NavigationDestination(
+              icon: Icon(Icons.list_alt), label: 'المعاملات'),
+          const NavigationDestination(
+              icon: Icon(Icons.bar_chart), label: 'التقارير'),
           const NavigationDestination(
             icon: Icon(Icons.account_balance_wallet),
             label: 'الحسابات',
@@ -358,8 +417,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             icon: Icon(Icons.auto_awesome),
             label: 'الذكاء',
           ),
-          NavigationDestination(icon: const Icon(Icons.rule),
-            label: reviewText(context, 'المراجعة', 'Review')),
+          NavigationDestination(
+              icon: const Icon(Icons.rule),
+              label: reviewText(context, 'المراجعة', 'Review')),
+          NavigationDestination(
+              icon: const Icon(Icons.home_outlined),
+              label: reviewText(context, 'الرئيسية', 'Home')),
         ],
       ),
     );

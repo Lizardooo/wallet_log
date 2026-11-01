@@ -58,6 +58,7 @@ class Parsed {
   final double fee;
   final String? party;
   final double? balance;
+
   /// true when the message is not a plain transfer / deduction, or the app is
   /// not sure about it: it is then left out of all totals until confirmed.
   final bool review;
@@ -256,7 +257,8 @@ int stableHash(String s) {
 
 /// Duplicate-detection key for an SMS. Kept here (not in the database layer) so
 /// the Excel importer can build keys without touching SQLite.
-String smsKey(String body, int ts) => '${stableHash(body.trim())}|${ts ~/ 300000}';
+String smsKey(String body, int ts) =>
+    '${stableHash(body.trim())}|${ts ~/ 300000}';
 
 String normalizeDigits(String s) {
   const ar = '٠١٢٣٤٥٦٧٨٩';
@@ -308,7 +310,9 @@ String? detectWallet(String sender, String body) {
     return 'Orange Cash';
   }
   if (b.contains('vodafone') || b.contains('فودافون')) return 'Vodafone Cash';
-  if (b.contains('etisalat') || b.contains('اتصالات') || b.contains('فوري') ||
+  if (b.contains('etisalat') ||
+      b.contains('اتصالات') ||
+      b.contains('فوري') ||
       b.contains('fawry')) {
     return 'Etisalat Cash / Fawry';
   }
@@ -445,7 +449,9 @@ Parsed? parseSms(String sender, String rawBody) {
   if (type == TxType.other && !viaWalletDeduction) return null;
   final hasDeduction = _deduction.hasMatch(l);
   if (viaWalletDeduction &&
-      (type == TxType.other || type == TxType.refund || type == TxType.cashIn)) {
+      (type == TxType.other ||
+          type == TxType.refund ||
+          type == TxType.cashIn)) {
     type = TxType.deduction;
   }
 
@@ -531,8 +537,10 @@ Dir dirFromText(String text) {
   final l = normalizeDigits(text).trim().toLowerCase();
   if (l.isEmpty) return Dir.unknown;
   bool has(List<String> words) => words.any((w) => l.contains(w));
-  final inAr = has(['وارد', 'داخل', 'دائن', 'استلام', 'استلمت', 'ايداع', 'إيداع']);
-  final outAr = has(['صادر', 'خارج', 'مدين', 'ارسال', 'إرسال', 'سحب', 'دفع', 'خصم']);
+  final inAr =
+      has(['وارد', 'داخل', 'دائن', 'استلام', 'استلمت', 'ايداع', 'إيداع']);
+  final outAr =
+      has(['صادر', 'خارج', 'مدين', 'ارسال', 'إرسال', 'سحب', 'دفع', 'خصم']);
   final tokens =
       l.split(RegExp(r'[^a-z+\-]+')).where((t) => t.isNotEmpty).toSet();
   const inLatin = {'in', 'credit', 'received', 'income', 'cr', '+'};
@@ -560,4 +568,36 @@ String? walletFromText(String text) {
     return 'Etisalat Cash / Fawry';
   }
   return null;
+}
+
+/// Strict rule for keeping a message from an unknown sender in the opt-in
+/// review inbox: an alphanumeric sender (not a person's phone number), a
+/// currency amount, a money-movement word and a wallet word, and none of the
+/// OTP / failure / promo markers. It only decides what is shown for review.
+bool isWalletCandidate(String sender, String rawBody) {
+  final s = sender.trim();
+  if (s.isEmpty || !RegExp(r'[A-Za-z\u0621-\u064A]').hasMatch(s)) return false;
+  final body = normalizeDigits(rawBody);
+  if (!_amountRe.hasMatch(body)) return false;
+  final low = body.toLowerCase();
+  if (_skip.hasMatch(low) || _promo.hasMatch(low)) return false;
+  final wallet =
+      RegExp(r'محفظ|كاش|wallet|cash|instapay|انستا|إنستا').hasMatch(low);
+  final move = RegExp(
+          r'تحويل|تم\s+(?:ايداع|إيداع|خصم|سحب|استلام)|حولت|transfer|deposit|withdraw|received|debited|credited|paid')
+      .hasMatch(low);
+  return wallet && move;
+}
+
+final _refRe = RegExp(
+    r'(?:رقم\s*(?:العملية|العمليه|المرجع|المعاملة|المعامله|المرجعي)|reference(?:\s*(?:no|number|id))?|ref(?:\.|\s*no\.?|\s*#)?|trx(?:\s*id)?|transaction\s*(?:id|no|number))\s*[:：#\-]?\s*([A-Za-z0-9]{6,20})',
+    caseSensitive: false);
+
+/// The provider's reference / transaction number when the message states one.
+/// Needs at least one digit so ordinary words are never taken as a reference.
+String? extractReference(String body) {
+  final m = _refRe.firstMatch(normalizeDigits(body));
+  final v = m?.group(1);
+  if (v == null || !RegExp(r'\d').hasMatch(v)) return null;
+  return v.toUpperCase();
 }

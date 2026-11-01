@@ -82,7 +82,9 @@ void main() {
       }
       await tester.pumpAndSettle();
       expect(find.byType(NavigationBar), findsOneWidget);
-      final destination = find.byType(NavigationDestination).last;
+      final destination = find
+          .byType(NavigationDestination)
+          .at(4); // Review (Home was appended as the sixth tab)
       await tester.tap(destination);
       await tester.pumpAndSettle();
       expect(find.byType(ReviewTab), findsOneWidget);

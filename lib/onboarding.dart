@@ -184,7 +184,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
         }
         final key = _key.text.trim();
         if (key.isNotEmpty) {
-          await TxDb.setSetting(TxDb.settingsApiKey, key);
+          await TxDb.setApiKey(key);
         }
         final model = _model;
         if (model != null && key.isNotEmpty) {
@@ -569,8 +569,8 @@ class _OnboardingPageState extends State<OnboardingPage> {
                   Expanded(child: Text(m.displayName)),
                   if (m.free)
                     Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         color: const Color(0xFFD7EBE9),
                         borderRadius: BorderRadius.circular(6),

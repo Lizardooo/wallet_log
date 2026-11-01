@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'ai_runner.dart';
 import 'db.dart';
 import 'gemini.dart';
-import 'logic.dart';
 import 'parser.dart';
 
 const _green = Color(0xFF0F766E);
@@ -21,8 +21,6 @@ class AiTab extends StatefulWidget {
 }
 
 class _AiTabState extends State<AiTab> {
-  static const _batch = 10;
-
   final _key = TextEditingController();
   List<GeminiModel> _models = const [];
   String? _model;
@@ -40,6 +38,8 @@ class _AiTabState extends State<AiTab> {
   int _total = 0;
   int _applied = 0;
   int _kept = 0;
+  int _analysed = 0;
+  bool _enabled = false;
 
   @override
   void initState() {
@@ -55,9 +55,12 @@ class _AiTabState extends State<AiTab> {
 
   Future<void> _load() async {
     final s = await TxDb.allSettings();
+    final key = await TxDb.apiKey();
+    final enabled = (s[AiRunner.settingEnabled] ?? '0') == '1';
     if (!mounted) return;
     setState(() {
-      _key.text = s[TxDb.settingsApiKey] ?? '';
+      _key.text = key;
+      _enabled = enabled;
       _model = s[TxDb.settingsModel];
       _loaded = true;
     });
@@ -65,8 +68,7 @@ class _AiTabState extends State<AiTab> {
 
   void _snack(String text) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(text)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _fetchModels({bool silent = false}) async {
@@ -91,7 +93,7 @@ class _AiTabState extends State<AiTab> {
           _model = (free.isNotEmpty ? free.first : list.first).id;
         }
       });
-      await TxDb.setSetting(TxDb.settingsApiKey, _key.text.trim());
+      await TxDb.setApiKey(_key.text.trim());
       if (_model != null) await TxDb.setSetting(TxDb.settingsModel, _model!);
       // Do not await: the list is usable at once, free status fills in.
       if (mounted) _probeAll(list, _key.text.trim());
@@ -153,9 +155,18 @@ class _AiTabState extends State<AiTab> {
       .where((t) => t.review || t.isUnknown || t.type == TxType.other)
       .toList();
 
-  Future<void> _run({required bool onlyUnclear}) async {
+  Future<void> _setEnabled(bool v) async {
+    await TxDb.setSetting(AiRunner.settingEnabled, v ? '1' : '0');
+    if (mounted) setState(() => _enabled = v);
+  }
+
+  Future<void> _run({required bool onlyUnclear, bool force = false}) async {
     final key = _key.text.trim();
     final model = _model;
+    if (!_enabled) {
+      _snack('فعّل التحليل بالذكاء الاصطناعي أولاً');
+      return;
+    }
     if (key.isEmpty) {
       _snack('أدخل مفتاح Gemini أولاً');
       return;
@@ -166,10 +177,9 @@ class _AiTabState extends State<AiTab> {
     }
     final targets = onlyUnclear ? _unclear : _eligible;
     if (targets.isEmpty) {
-      _snack('لا توجد رسائل لتصنيفها');
+      _snack('لا توجد رسائل لتحليلها');
       return;
     }
-
     setState(() {
       _running = true;
       _error = null;
@@ -178,63 +188,28 @@ class _AiTabState extends State<AiTab> {
       _applied = 0;
       _kept = 0;
     });
-
-    var applied = 0;
-    var kept = 0;
     try {
-      for (var i = 0; i < targets.length; i += _batch) {
-        final scheduled = targets.skip(i).take(_batch).toList();
-        final chunk = await TxDb.classificationBatch(scheduled.map((t) => t.id));
-        if (!mounted) return;
-        if (chunk.isEmpty) {
-          setState(() => _done += scheduled.length);
-          continue;
-        }
-        final items = [
-          for (final t in chunk)
-            AiItem(
-              id: t.id,
-              wallet: t.wallet,
-              amount: fmt(t.amount),
-              guess: '${t.type.label} / ${t.dir.label}',
-              body: t.body,
-            ),
-        ];
-        final res = await classifyMessages(
+      // Suggestions are only stored; nothing about a transaction changes here.
+      final res = await AiRunner.run(await TxDb.database(),
           apiKey: key,
           model: model,
-          items: items,
-        );
-        final updates = <AiUpdate>[];
-        for (final r in res) {
-          final confident = r.confidence >= 0.6 &&
-              r.dir != Dir.unknown &&
-              r.type != TxType.other;
-          updates.add(AiUpdate(
-            id: r.id,
-            type: r.type,
-            dir: r.dir,
-            confirm: confident,
-            note: r.reason,
-          ));
-        }
-        final saved = await TxDb.applyAiUpdates(updates);
-        for (final u in updates) {
-          if (!saved.contains(u.id)) continue;
-          if (u.confirm) { applied++; } else { kept++; }
-        }
-        await widget.onChanged();
-        if (!mounted) return;
-        setState(() {
-          _done += scheduled.length;
-          _applied = applied;
-          _kept = kept;
-        });
-      }
+          onlyIds: targets.map((t) => t.id),
+          force: force, onProgress: (d, t) {
+        if (mounted) setState(() => _done = d);
+      });
+      await widget.onChanged();
+      if (!mounted) return;
+      setState(() {
+        _applied = res.suggestions;
+        _kept = res.skippedCached;
+        _analysed = res.analysed;
+      });
     } on GeminiException catch (e) {
       if (mounted) setState(() => _error = e.message);
+    } on AiDisabledException {
+      if (mounted) setState(() => _error = 'التحليل بالذكاء الاصطناعي متوقف.');
     } catch (e) {
-      if (mounted) setState(() => _error = 'توقف التصنيف: $e');
+      if (mounted) setState(() => _error = 'توقف التحليل: $e');
     } finally {
       if (mounted) setState(() => _running = false);
     }
@@ -280,6 +255,17 @@ class _AiTabState extends State<AiTab> {
                   'https://aistudio.google.com/apikey',
                   style: TextStyle(fontSize: 11, color: _green),
                 ),
+                const SizedBox(height: 6),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _enabled,
+                  onChanged: _setEnabled,
+                  title: const Text('تفعيل التحليل بالذكاء الاصطناعي'),
+                  subtitle: const Text(
+                      'متوقف افتراضياً. التطبيق يعمل بدونه بالكامل.'),
+                ),
+                const Text(aiDisclosureAr, style: TextStyle(fontSize: 11)),
+                const Text(aiDisclosureEn, style: TextStyle(fontSize: 11)),
                 const SizedBox(height: 10),
                 TextField(
                   controller: _key,
@@ -302,8 +288,7 @@ class _AiTabState extends State<AiTab> {
                 Row(
                   children: [
                     FilledButton.tonalIcon(
-                      onPressed:
-                          _loadingModels ? null : () => _fetchModels(),
+                      onPressed: _loadingModels ? null : () => _fetchModels(),
                       icon: _loadingModels
                           ? const SizedBox(
                               width: 16,
@@ -395,8 +380,7 @@ class _AiTabState extends State<AiTab> {
                           ),
                       ],
                     ),
-                    subtitle: Text(m.id,
-                        style: const TextStyle(fontSize: 11)),
+                    subtitle: Text(m.id, style: const TextStyle(fontSize: 11)),
                   ),
               ],
             ),
@@ -459,8 +443,8 @@ class _AiTabState extends State<AiTab> {
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
-                      'تم احتساب $_applied رسالة'
-                      '${_kept > 0 ? ' · $_kept رسالة تحتاج تأكيدك' : ''}.',
+                      'تم تحليل $_analysed رسالة · $_applied اقتراح بانتظار مراجعتك'
+                      '${_kept > 0 ? ' · $_kept رسالة محللة سابقاً (لم تُرسل)' : ''}.',
                       style: const TextStyle(color: _green, fontSize: 12),
                     ),
                   ),
@@ -468,8 +452,8 @@ class _AiTabState extends State<AiTab> {
                   const Padding(
                     padding: EdgeInsets.only(top: 4),
                     child: Text(
-                      'التصنيفات المنخفضة الثقة تبقى في "تحتاج مراجعة" حتى '
-                      'تفتحها وتؤكدها، فمافيش مبلغ بيتحسب بالغلط.',
+                      'Gemini يقترح فقط: لا يتغير أي مبلغ أو اتجاه أو حالة قبل أن '
+                      'تقبل الاقتراح من شاشة الاقتراحات.',
                       style: TextStyle(fontSize: 11),
                     ),
                   ),

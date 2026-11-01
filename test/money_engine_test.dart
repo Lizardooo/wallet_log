@@ -58,15 +58,27 @@ void main() {
   });
 
   test('recharge 100 + fee 2 debits 102 and leaves 898', () {
-    expect(
-        expectedAfter(toMinor(1000), debitMinor: toMinor(100) + toMinor(2)),
+    expect(expectedAfter(toMinor(1000), debitMinor: toMinor(100) + toMinor(2)),
         toMinor(898));
   });
 
   test('fixed, min, max and rounding', () {
-    FeeRule r({int fixed = 0, int bp = 0, int? min, int? max, Rounding ro = Rounding.nearest}) =>
-        FeeRule(id: 1, provider: 'p', kind: 'k', fixedMinor: fixed, percentBp: bp,
-            minMinor: min, maxMinor: max, rounding: ro, effectiveFrom: _d);
+    FeeRule r(
+            {int fixed = 0,
+            int bp = 0,
+            int? min,
+            int? max,
+            Rounding ro = Rounding.nearest}) =>
+        FeeRule(
+            id: 1,
+            provider: 'p',
+            kind: 'k',
+            fixedMinor: fixed,
+            percentBp: bp,
+            minMinor: min,
+            maxMinor: max,
+            rounding: ro,
+            effectiveFrom: _d);
     expect(computeFee(r(fixed: 500), 99999)!.feeMinor, 500);
     expect(computeFee(r(bp: 50, min: 100), 1000)!.feeMinor, 100); // min
     expect(computeFee(r(bp: 50, max: 1500), 10000000)!.feeMinor, 1500); // max
@@ -77,7 +89,10 @@ void main() {
 
   test('tiered fees; an uncovered amount is unknown, not zero', () {
     final rule = FeeRule(
-      id: 2, provider: 'p', kind: 'send', effectiveFrom: _d,
+      id: 2,
+      provider: 'p',
+      kind: 'send',
+      effectiveFrom: _d,
       tiers: const [
         FeeTier(fromMinor: 0, toMinor: 100000, fixedMinor: 100),
         FeeTier(fromMinor: 100000, toMinor: 500000, fixedMinor: 300),
@@ -89,33 +104,62 @@ void main() {
   });
 
   test('rule changes do not rewrite history: snapshot keeps rule version', () {
-    final old = atm(id: 1, version: 1, from: DateTime(2026, 1, 1), to: DateTime(2026, 6, 1));
+    final old = atm(
+        id: 1,
+        version: 1,
+        from: DateTime(2026, 1, 1),
+        to: DateTime(2026, 6, 1));
     final newer = FeeRule(
-        id: 1, version: 2, provider: 'p1', kind: 'cash_out', channel: 'atm',
-        percentBp: 150, effectiveFrom: DateTime(2026, 6, 1));
+        id: 1,
+        version: 2,
+        provider: 'p1',
+        kind: 'cash_out',
+        channel: 'atm',
+        percentBp: 150,
+        effectiveFrom: DateTime(2026, 6, 1));
     final rules = [old, newer];
-    final before = selectRule(rules, 'p1', 'cash_out', 'atm', DateTime(2026, 3, 1))!;
-    final after = selectRule(rules, 'p1', 'cash_out', 'atm', DateTime(2026, 7, 1))!;
+    final before =
+        selectRule(rules, 'p1', 'cash_out', 'atm', DateTime(2026, 3, 1))!;
+    final after =
+        selectRule(rules, 'p1', 'cash_out', 'atm', DateTime(2026, 7, 1))!;
     expect(computeFee(before, 100000)!.feeMinor, 1000);
     expect(computeFee(before, 100000)!.ruleVersion, 1);
     expect(computeFee(after, 100000)!.feeMinor, 1500);
     expect(computeFee(after, 100000)!.ruleVersion, 2);
   });
 
-  test('rule selection: channel match wins, other provider/inactive ignored', () {
-    final any = FeeRule(id: 1, provider: 'p1', kind: 'cash_out', fixedMinor: 999, effectiveFrom: _d);
+  test('rule selection: channel match wins, other provider/inactive ignored',
+      () {
+    final any = FeeRule(
+        id: 1,
+        provider: 'p1',
+        kind: 'cash_out',
+        fixedMinor: 999,
+        effectiveFrom: _d);
     final atmRule = atm(id: 2);
-    final off = FeeRule(id: 3, provider: 'p1', kind: 'cash_out', channel: 'atm',
-        fixedMinor: 1, effectiveFrom: _d, active: false);
-    final other = FeeRule(id: 4, provider: 'p2', kind: 'cash_out', channel: 'atm',
-        fixedMinor: 1, effectiveFrom: _d);
+    final off = FeeRule(
+        id: 3,
+        provider: 'p1',
+        kind: 'cash_out',
+        channel: 'atm',
+        fixedMinor: 1,
+        effectiveFrom: _d,
+        active: false);
+    final other = FeeRule(
+        id: 4,
+        provider: 'p2',
+        kind: 'cash_out',
+        channel: 'atm',
+        fixedMinor: 1,
+        effectiveFrom: _d);
     final rules = [any, atmRule, off, other];
     expect(selectRule(rules, 'p1', 'cash_out', 'atm', _d)!.id, 2);
     expect(selectRule(rules, 'p1', 'cash_out', 'agent', _d)!.id, 1);
     expect(selectRule(rules, 'p3', 'cash_out', 'atm', _d), isNull);
   });
 
-  test('reconciliation: matched, earliest divergence, no opening, no evidence', () {
+  test('reconciliation: matched, earliest divergence, no opening, no evidence',
+      () {
     final ok = [
       LedgerEntry(creditMinor: 5000, statedBalanceMinor: 105000),
       LedgerEntry(debitMinor: 10200),
@@ -143,5 +187,16 @@ void main() {
     final a = expectedAfter(100000, debitMinor: 50000);
     final b = expectedAfter(20000, creditMinor: 50000);
     expect(a + b, 100000 + 20000);
+  });
+
+  test('parseMinor is exact and refuses sub-piaster or junk input', () {
+    expect(parseMinor('1,250.5'), 125050);
+    expect(parseMinor('١٢٫٥٠'), 1250);
+    expect(parseMinor('0.07'), 7);
+    expect(parseMinor('19.99'), 1999); // a double would give 1998.999...
+    expect(parseMinor('1.234'), isNull);
+    expect(parseMinor('-5'), isNull);
+    expect(parseMinor(''), isNull);
+    expect(parseMinor('abc'), isNull);
   });
 }

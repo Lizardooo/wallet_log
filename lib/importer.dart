@@ -23,6 +23,10 @@ class ImportRow {
   /// is stored for the owner's review and stays out of the totals.
   final bool review;
 
+  /// true when the date was carried over from the previous row, not read from
+  /// this one.
+  final bool dateInferred;
+
   const ImportRow({
     required this.key,
     required this.ts,
@@ -35,6 +39,7 @@ class ImportRow {
     this.note = '',
     this.body = '',
     this.review = false,
+    this.dateInferred = false,
   });
 }
 
@@ -133,11 +138,26 @@ const _keywords = <_Field, List<String>>{
 const _typeWords = <TxType, List<String>>{
   TxType.refund: ['استرداد', 'إسترداد', 'إرجاع', 'refund', 'reversal'],
   TxType.bill: ['فواتير', 'فاتورة', 'سداد', 'bill'],
-  TxType.cashIn: ['ايداع', 'إيداع', 'استلام', 'استلمت', 'ضخ', 'deposit', 'cash in'],
+  TxType.cashIn: [
+    'ايداع',
+    'إيداع',
+    'استلام',
+    'استلمت',
+    'ضخ',
+    'deposit',
+    'cash in'
+  ],
   TxType.cashOut: ['سحب', 'صراف', 'atm', 'withdraw'],
   TxType.topup: ['شحن', 'recharge', 'top up', 'topup'],
   TxType.deduction: ['خصم', 'استقطاع', 'deduct', 'debit'],
-  TxType.payment: ['مشتريات', 'تاجر', 'شراء', 'merchant', 'purchase', 'payment'],
+  TxType.payment: [
+    'مشتريات',
+    'تاجر',
+    'شراء',
+    'merchant',
+    'purchase',
+    'payment'
+  ],
   TxType.fee: ['رسوم', 'عمولة', 'fee', 'commission'],
   TxType.transfer: ['تحويل', 'حول', 'transfer', 'sent', 'received'],
 };
@@ -317,10 +337,11 @@ SheetImport _readSheet(String name, Sheet sheet) {
       continue;
     }
 
-    final date = _date('${cellAt(cells, _Field.date)} '
-            '${cellAt(cells, _Field.time)} ${cellAt(cells, _Field.note)}') ??
-        lastDate;
-    if (date != null) lastDate = date;
+    final own = _date('${cellAt(cells, _Field.date)} '
+        '${cellAt(cells, _Field.time)} ${cellAt(cells, _Field.note)}');
+    final date = own ?? lastDate;
+    final inferred = own == null;
+    if (own != null) lastDate = own;
     if (date == null) {
       // An unknown date is never replaced by today's date.
       skipped++;
@@ -332,9 +353,8 @@ SheetImport _readSheet(String name, Sheet sheet) {
     final typeText = cellAt(cells, _Field.type);
     final noteText = cellAt(cells, _Field.note);
     final type = _type(typeText, noteText);
-    var dir = _dir(cellAt(cells, _Field.dir)) ??
-        _dir(typeText) ??
-        _defaultDir(type);
+    var dir =
+        _dir(cellAt(cells, _Field.dir)) ?? _dir(typeText) ?? _defaultDir(type);
     // Only an explicit negative sign is evidence of direction; a bare positive
     // amount is never assumed to be income.
     dir ??= amount < 0 ? Dir.outFlow : null;
@@ -358,6 +378,7 @@ SheetImport _readSheet(String name, Sheet sheet) {
           '${noteText.isEmpty ? '' : ' · $noteText'}',
       body: raw,
       review: uncertain,
+      dateInferred: inferred,
     ));
     if (preview.length < 4) {
       preview.add('${_dayText(when)} · ${type.label} · ${dir.label} · '
@@ -387,8 +408,7 @@ String _fieldLabel(_Field f) => switch (f) {
       _Field.note => 'البيان',
     };
 
-String _dayText(DateTime d) =>
-    '${d.year}-${_two(d.month)}-${_two(d.day)}';
+String _dayText(DateTime d) => '${d.year}-${_two(d.month)}-${_two(d.day)}';
 
 /// "1,250.50 EGP" / "١٢٥٠٫٥" / "(300)" / "-300" -> number.
 double? _money(String raw) {
@@ -424,8 +444,7 @@ double? _money(String raw) {
 DateTime _serialDate(double n) {
   final days = n.floor();
   final ms = ((n - days) * 86400000).round();
-  return DateTime(1899, 12, 30)
-      .add(Duration(days: days, milliseconds: ms));
+  return DateTime(1899, 12, 30).add(Duration(days: days, milliseconds: ms));
 }
 
 DateTime? _date(String raw) {

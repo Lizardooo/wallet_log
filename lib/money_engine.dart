@@ -9,12 +9,30 @@ library;
 /// Converts a pounds amount read from a message or sheet to piasters.
 int toMinor(num pounds) => (pounds * 100).round();
 
+/// Parses what a person typed ("1,250.5", "١٢٫٥٠") into piasters without any
+/// floating-point step. Null for empty, negative, non-numeric or sub-piaster
+/// input (more than two decimals) so nothing is silently rounded.
+int? parseMinor(String input) {
+  const arabic = '٠١٢٣٤٥٦٧٨٩';
+  final t = input
+      .split('')
+      .map((c) => arabic.contains(c) ? arabic.indexOf(c).toString() : c)
+      .join()
+      .replaceAll('٫', '.')
+      .replaceAll(RegExp(r'[,\s٬]'), '');
+  final m = RegExp(r'^(\d{1,12})(?:\.(\d{1,2}))?$').firstMatch(t);
+  if (m == null) return null;
+  return int.parse(m.group(1)!) * 100 +
+      int.parse((m.group(2) ?? '').padRight(2, '0'));
+}
+
 /// Formats piasters as "1,234.50" without floating-point arithmetic.
 String formatMinor(int minor) {
   final neg = minor < 0;
   final abs = minor.abs();
-  final whole = (abs ~/ 100).toString().replaceAllMapped(
-      RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+  final whole = (abs ~/ 100)
+      .toString()
+      .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
   final frac = (abs % 100).toString().padLeft(2, '0');
   return '${neg ? '-' : ''}$whole.$frac';
 }
@@ -214,7 +232,8 @@ class ReconResult {
 /// force a match: after a mismatch the running value is kept, and only the
 /// earliest divergence is reported.
 ReconResult reconcile(int? openingMinor, List<LedgerEntry> entries) {
-  if (openingMinor == null) return const ReconResult(ReconStatus.missingOpening);
+  if (openingMinor == null)
+    return const ReconResult(ReconStatus.missingOpening);
   var running = openingMinor;
   var compared = false;
   for (var i = 0; i < entries.length; i++) {
@@ -230,4 +249,43 @@ ReconResult reconcile(int? openingMinor, List<LedgerEntry> entries) {
   }
   return ReconResult(
       compared ? ReconStatus.matched : ReconStatus.insufficientEvidence);
+}
+
+/// Converts a legacy REAL pounds value to piasters only when it is exactly a
+/// whole number of piasters (allowing for binary representation error). A value
+/// with sub-piaster precision returns null so the caller keeps it unconverted
+/// and reports it; nothing is rounded silently.
+int? exactMinor(num? pounds) {
+  if (pounds == null || !pounds.isFinite) return null;
+  final scaled = pounds * 100;
+  final r = scaled.round();
+  if ((scaled - r).abs() > 1e-6) return null;
+  return r;
+}
+
+/// Effect of a transaction on its wallet balance, in piasters. A fee the owner
+/// pays is a charge: incoming = +amount - fee, outgoing = -(amount + fee); a fee
+/// paid by someone else does not move the wallet. Null when the
+/// direction or an amount is unknown (the impact is then not guessed).
+int? walletImpactMinor(String dir, int? amountMinor, int? feeMinor,
+    {String feeOwner = 'owner'}) {
+  if (amountMinor == null) return null;
+  // Only a fee the wallet owner pays moves the wallet. A fee paid by the
+  // sender or another party is not deducted, and an unknown owner is not
+  // guessed: it stays out of the impact and shows up as an uncertain amount.
+  final fee = feeOwner == 'owner' ? (feeMinor ?? 0) : 0;
+  return switch (dir) {
+    'in' => amountMinor - fee,
+    'out' => -(amountMinor + fee),
+    _ => null,
+  };
+}
+
+/// Who pays a fee.
+class FeeOwner {
+  static const owner = 'owner';
+  static const sender = 'sender';
+  static const other = 'other';
+  static const unknown = 'unknown';
+  static const all = {owner, sender, other, unknown};
 }
