@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'ai_tab.dart';
 import 'db.dart';
+import 'exporter.dart';
 import 'logic.dart';
 import 'onboarding.dart';
 import 'tabs.dart';
@@ -197,6 +198,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ),
         title: Text('أموالي · ${_titles[_tab]}'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.download),
+            tooltip: 'تصدير تقرير Excel',
+            onPressed: () => exportExcelReport(
+              context,
+              txs: _tab == 0
+                  ? _txs.where((t) => _filter.matches(t, _accounts)).toList()
+                  : _txs,
+              accounts: _accounts,
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.upload_file),
             tooltip: 'استيراد تقرير Excel',
