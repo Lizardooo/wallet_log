@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'ai_tab.dart';
 import 'db.dart';
@@ -16,6 +17,12 @@ class WalletLogApp extends StatelessWidget {
     return MaterialApp(
       title: 'أموالي',
       debugShowCheckedModeBanner: false,
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [Locale('ar'), Locale('en')],
       theme: ThemeData(colorSchemeSeed: const Color(0xFF0F766E), useMaterial3: true),
       home: const HomePage(),
     );
@@ -189,6 +196,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ),
         title: Text('أموالي · ${_titles[_tab]}'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.upload_file),
+            tooltip: 'استيراد تقرير Excel',
+            onPressed: () => importExcelReport(context, onDone: _reload),
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'إعادة قراءة الرسائل',

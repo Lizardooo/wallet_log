@@ -402,8 +402,9 @@ Future<Account?> editAccount(
 class _DayHeader {
   final String day;
   final Totals totals;
+  final List<Tx> txs;
 
-  const _DayHeader(this.day, this.totals);
+  const _DayHeader(this.day, this.totals, this.txs);
 }
 
 class TransactionsTab extends StatefulWidget {
@@ -603,7 +604,7 @@ class _TransactionsTabState extends State<TransactionsTab> {
                       ChoiceChip(
                         avatar: const Icon(Icons.edit_calendar, size: 16),
                         label: Text(custom
-                            ? '${_f.from != null ? dayKey(_f.from!) : '...'} ← ${_f.to != null ? dayKey(_f.to!) : '...'}'
+                            ? '${_f.from != null ? dayKey(_f.from!) : '...'} – ${_f.to != null ? dayKey(_f.to!) : '...'}'
                             : 'نطاق محدد'),
                         selected: custom,
                         onSelected: (_) async {
@@ -673,10 +674,9 @@ class _TransactionsTabState extends State<TransactionsTab> {
     for (final t in list) {
       groups.putIfAbsent(dayKeyTs(t.ts), () => []).add(t);
     }
-    final items = <Object>[];
+    final items = <_DayHeader>[];
     groups.forEach((day, l) {
-      items.add(_DayHeader(day, totalsOf(l)));
-      items.addAll(l);
+      items.add(_DayHeader(day, totalsOf(l), l));
     });
 
     final toolbar = Padding(
@@ -687,7 +687,7 @@ class _TransactionsTabState extends State<TransactionsTab> {
                 IconButton(
                   tooltip: 'رجوع',
                   onPressed: () => setState(() => _review = false),
-                  icon: const Icon(Icons.arrow_forward),
+                  icon: const Icon(Icons.arrow_back),
                 ),
                 Expanded(
                   child: Text('تحتاج مراجعة (${reviewList.length})',
@@ -827,9 +827,7 @@ class _TransactionsTabState extends State<TransactionsTab> {
                     padding: const EdgeInsets.only(bottom: 16),
                     itemCount: items.length,
                     itemBuilder: (ctx, i) {
-                      final it = items[i];
-                      if (it is _DayHeader) return _header(context, it);
-                      return _tile(context, it as Tx);
+                      return _dayCard(context, items[i]);
                     },
                   ),
                 ),
@@ -838,15 +836,33 @@ class _TransactionsTabState extends State<TransactionsTab> {
     );
   }
 
+  Widget _dayCard(BuildContext context, _DayHeader h) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      decoration: BoxDecoration(
+        border: Border.all(color: cs.outlineVariant, width: 1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(context, h),
+          for (final t in h.txs) ...[
+            Divider(height: 1, color: cs.outlineVariant),
+            _tile(context, t),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _header(BuildContext context, _DayHeader h) {
     final grey = Theme.of(context).colorScheme.onSurfaceVariant;
     return Container(
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: grey, width: 1),
-        ),
-      ),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: Row(
         children: [
           Expanded(
@@ -890,12 +906,8 @@ class _TransactionsTabState extends State<TransactionsTab> {
     ].join(' · ');
     final small = TextStyle(fontSize: 11, color: cs.onSurfaceVariant);
 
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: cs.onSurfaceVariant, width: 1),
-        ),
-      ),
+    return InkWell(
+      onTap: () => widget.onTap(t),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(
@@ -932,9 +944,9 @@ class _TransactionsTabState extends State<TransactionsTab> {
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: small),
-                           ),
-                         ],
-                       ),
+                          ),
+                        ],
+                      ),
                     ),
                   if (pending)
                     Padding(
@@ -951,12 +963,9 @@ class _TransactionsTabState extends State<TransactionsTab> {
                   if (mm != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        '⚠ الرصيد لا يطابق (فرق ${fmt(mm)}',
-                        style: const TextStyle(fontSize: 11, color: _orange)),
-                      ),
+                      child: Text('⚠ الرصيد لا يطابق (فرق ${fmt(mm)})',
+                          style: const TextStyle(fontSize: 11, color: _orange)),
                     ),
-                  ],),
                 ],
               ),
             ),
@@ -1054,7 +1063,7 @@ class _DailyTabState extends State<DailyTab> {
         Row(
           children: [
             IconButton(
-              icon: const Icon(Icons.chevron_right),
+              icon: const Icon(Icons.chevron_left),
               onPressed: () => _shift(-1),
             ),
             Expanded(
@@ -1065,7 +1074,7 @@ class _DailyTabState extends State<DailyTab> {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.chevron_left),
+              icon: const Icon(Icons.chevron_right),
               onPressed: isToday ? null : () => _shift(1),
             ),
           ],
@@ -1254,66 +1263,11 @@ class _ReportsTabState extends State<ReportsTab> {
         .showSnackBar(SnackBar(content: Text(text)));
   }
 
-  /// Imports a report the owner exported from Excel / Google Sheets. The sheet
-  /// and the recognized columns are shown before anything is stored.
-  Future<void> _importExcel() async {
-    try {
-      const group = XTypeGroup(
-        label: 'Excel',
-        extensions: ['xlsx'],
-        mimeTypes: [
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        ],
-        uniformTypeIdentifiers: ['org.openxmlformats.spreadsheetml.sheet'],
+  Future<void> _importExcel() => importExcelReport(
+        context,
+        account: _selectedAccount(),
+        onDone: widget.onChanged,
       );
-      final file = await openFile(acceptedTypeGroups: [group]);
-      if (file == null) return;
-      final bytes = await file.readAsBytes();
-      final workbook = readWorkbook(bytes);
-      if (workbook.error != null) {
-        _snack(workbook.error!);
-        return;
-      }
-      if (workbook.isEmpty) {
-        if (mounted) {
-          await showDialog<void>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('لم أجد صفوفاً واضحة'),
-              content: Text(
-                'قرأت الملف لكن لم أتعرف على صفوف فيها تاريخ ومبلغ.\n'
-                'الأعمدة المطلوبة على الأقل: تاريخ + مبلغ، ويفضل كمان: نوع '
-                'العملية، الاتجاه، المحفظة، البيان.\n\n'
-                'الأعمدة التي كانت في الملف: '
-                '${workbook.sheets.map((s) => '${s.name} (${s.columns.join('، ')})').join(' · ')}',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('حسناً'),
-                ),
-              ],
-            ),
-          );
-        }
-        return;
-      }
-      if (!mounted) return;
-      final sheet = await showDialog<SheetImport>(
-        context: context,
-        builder: (ctx) => _ImportDialog(sheets: workbook.sheets),
-      );
-      if (sheet == null) return;
-      final added =
-          await TxDb.importRows(sheet.rows, account: _selectedAccount());
-      await widget.onChanged();
-      _snack(added == 0
-          ? 'كل صفوف "${sheet.name}" موجودة بالفعل، لم يتغير شيء.'
-          : 'تم استيراد $added معاملة من "${sheet.name}" إلى التقارير.');
-    } catch (e) {
-      _snack('تعذر استيراد الملف: $e');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1350,7 +1304,7 @@ class _ReportsTabState extends State<ReportsTab> {
               avatar: const Icon(Icons.edit_calendar, size: 16),
               label: Text(c == null
                   ? 'نطاق محدد'
-                  : '${dayKey(c.start)} ← ${dayKey(c.end)}'),
+                  : '${dayKey(c.start)} – ${dayKey(c.end)}'),
               selected: _period == 5,
               onSelected: (_) => _pickCustom(),
             ),
@@ -1642,6 +1596,77 @@ class _AccountsTabState extends State<AccountsTab> {
 }
 
 // ------------------------------------------------------------- excel import
+
+/// Imports a report the owner exported from Excel / Google Sheets. The sheet
+/// and the recognized columns are shown before anything is stored.
+Future<void> importExcelReport(
+  BuildContext context, {
+  Account? account,
+  required Future<void> Function() onDone,
+}) async {
+  void snack(String text) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  try {
+    const group = XTypeGroup(
+      label: 'Excel',
+      extensions: ['xlsx'],
+      mimeTypes: [
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ],
+      uniformTypeIdentifiers: ['org.openxmlformats.spreadsheetml.sheet'],
+    );
+    final file = await openFile(acceptedTypeGroups: [group]);
+    if (file == null) return;
+    final bytes = await file.readAsBytes();
+    final workbook = readWorkbook(bytes);
+    if (workbook.error != null) {
+      snack(workbook.error!);
+      return;
+    }
+    if (workbook.isEmpty) {
+      if (context.mounted) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('لم أجد صفوفاً واضحة'),
+            content: Text(
+              'قرأت الملف لكن لم أتعرف على صفوف فيها تاريخ ومبلغ.\n'
+              'الأعمدة المطلوبة على الأقل: تاريخ + مبلغ، ويفضل كمان: نوع '
+              'العملية، الاتجاه، المحفظة، البيان.\n\n'
+              'الأعمدة التي كانت في الملف: '
+              '${workbook.sheets.map((s) => '${s.name} (${s.columns.join('، ')})').join(' · ')}',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('حسناً'),
+              ),
+            ],
+          ),
+        );
+      }
+      return;
+    }
+    if (!context.mounted) return;
+    final sheet = await showDialog<SheetImport>(
+      context: context,
+      builder: (ctx) => _ImportDialog(sheets: workbook.sheets),
+    );
+    if (sheet == null) return;
+    final added =
+        await TxDb.importRows(sheet.rows, account: account);
+    await onDone();
+    snack(added == 0
+        ? 'كل صفوف "${sheet.name}" موجودة بالفعل، لم يتغير شيء.'
+        : 'تم استيراد $added معاملة من "${sheet.name}" إلى التقارير.');
+  } catch (e) {
+    snack('تعذر استيراد الملف: $e');
+  }
+}
+
 
 /// Lets the owner pick a sheet and shows what was understood before importing.
 class _ImportDialog extends StatefulWidget {

@@ -271,14 +271,14 @@ class _OnboardingPageState extends State<OnboardingPage> {
                   if (_step > 0)
                     TextButton.icon(
                       onPressed: _saving ? null : _back,
-                      icon: const Icon(Icons.chevron_right),
+                      icon: const Icon(Icons.chevron_left),
                       label: const Text('السابق'),
                     ),
                   const Spacer(),
                   if (_step < 1)
                     FilledButton.icon(
                       onPressed: _saving ? null : _next,
-                      icon: const Icon(Icons.chevron_left),
+                      icon: const Icon(Icons.chevron_right),
                       label: const Text('التالي'),
                     )
                   else
