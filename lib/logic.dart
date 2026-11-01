@@ -8,8 +8,11 @@ String fmt(double v) => v.toStringAsFixed(2);
 
 int dayStartMs(String key) {
   final p = key.split('-');
-  return DateTime(int.parse(p[0]), int.parse(p[1]), int.parse(p[2]))
-      .millisecondsSinceEpoch;
+  return DateTime(
+    int.parse(p[0]),
+    int.parse(p[1]),
+    int.parse(p[2]),
+  ).millisecondsSinceEpoch;
 }
 
 /// Finds which of the trader's wallet numbers a transaction belongs to.
@@ -85,39 +88,123 @@ Totals totalsOf(Iterable<Tx> txs) {
   return t;
 }
 
-/// Filter shared by the transactions list. [from] and [to] are whole days,
-/// both inclusive.
+/// Keep the selected shortcut separate from its dates: on the first of a
+/// month, "today" and "this month" can have identical bounds.
+enum DatePeriod {
+  all,
+  today,
+  yesterday,
+  last7Days,
+  last30Days,
+  thisMonth,
+  custom,
+}
+
+class DateFilter {
+  DatePeriod period;
+  DateTime? from;
+  DateTime? to;
+
+  DateFilter({this.period = DatePeriod.all});
+
+  void select(DatePeriod value) {
+    if (value == DatePeriod.custom && (from == null || to == null)) {
+      throw StateError('Choose a custom range first');
+    }
+    period = value;
+  }
+
+  void setCustom(DateTime start, DateTime end) {
+    final a = DateTime(start.year, start.month, start.day);
+    final b = DateTime(end.year, end.month, end.day);
+    from = a.isAfter(b) ? b : a;
+    to = a.isAfter(b) ? a : b;
+    period = DatePeriod.custom;
+  }
+
+  void clear() {
+    period = DatePeriod.all;
+    from = null;
+    to = null;
+  }
+
+  /// Local calendar days; start is inclusive and end is exclusive. Calendar
+  /// constructors (not 24-hour durations) also handle DST and year boundaries.
+  ({DateTime? start, DateTime? end}) bounds({DateTime? now}) {
+    final n = now ?? DateTime.now();
+    final today = DateTime(n.year, n.month, n.day);
+    final tomorrow = DateTime(n.year, n.month, n.day + 1);
+    return switch (period) {
+      DatePeriod.all => (start: null, end: null),
+      DatePeriod.today => (start: today, end: tomorrow),
+      DatePeriod.yesterday => (
+          start: DateTime(n.year, n.month, n.day - 1),
+          end: today,
+        ),
+      DatePeriod.last7Days => (
+          start: DateTime(n.year, n.month, n.day - 6),
+          end: tomorrow,
+        ),
+      DatePeriod.last30Days => (
+          start: DateTime(n.year, n.month, n.day - 29),
+          end: tomorrow,
+        ),
+      DatePeriod.thisMonth => (start: DateTime(n.year, n.month), end: tomorrow),
+      DatePeriod.custom => (
+          start: from,
+          end: to == null ? null : DateTime(to!.year, to!.month, to!.day + 1),
+        ),
+    };
+  }
+
+  bool matches(int ts, {DateTime? now}) {
+    final range = bounds(now: now);
+    return (range.start == null || ts >= range.start!.millisecondsSinceEpoch) &&
+        (range.end == null || ts < range.end!.millisecondsSinceEpoch);
+  }
+}
+
+/// Shared by the list, its summary and Excel export. Reports use matchesBase
+/// so pending rows remain visible in their separate review counts.
 class TxFilter {
   int? accountId;
   Set<TxType> types = {};
+  Dir? dir;
   bool reviewOnly = false;
-  DateTime? from;
-  DateTime? to;
+  final DateFilter date;
+
+  TxFilter({DatePeriod period = DatePeriod.all})
+      : date = DateFilter(period: period);
 
   bool get isActive =>
       accountId != null ||
       types.isNotEmpty ||
+      dir != null ||
       reviewOnly ||
-      from != null ||
-      to != null;
+      date.period != DatePeriod.all;
 
-  bool matches(Tx t, List<Account> accounts) {
+  void clear() {
+    accountId = null;
+    types.clear();
+    dir = null;
+    reviewOnly = false;
+    date.clear();
+  }
+
+  bool matchesBase(Tx t, List<Account> accounts, {DateTime? now}) {
     if (accountId != null && accountFor(t, accounts)?.id != accountId) {
       return false;
     }
     if (types.isNotEmpty && !types.contains(t.type)) return false;
-    if (reviewOnly && !t.review) return false;
-    final f = from;
-    if (f != null &&
-        t.ts < DateTime(f.year, f.month, f.day).millisecondsSinceEpoch) {
-      return false;
-    }
-    final e = to;
-    if (e != null &&
-        t.ts >= DateTime(e.year, e.month, e.day + 1).millisecondsSinceEpoch) {
-      return false;
-    }
-    return true;
+    return date.matches(t.ts, now: now);
+  }
+
+  bool matches(Tx t, List<Account> accounts, {DateTime? now}) {
+    if (!matchesBase(t, accounts, now: now)) return false;
+    final pending = t.review || t.isUnknown;
+    // The review view is independent of the last in/out selection.
+    if (reviewOnly) return pending;
+    return !pending && (dir == null || t.dir == dir);
   }
 }
 
@@ -192,8 +279,12 @@ class DayRow {
 }
 
 /// [all] must be sorted newest first (as TxDb.allTx returns it).
-List<DayRow> dailyRows(String day, List<Tx> all, List<Account> accounts,
-    Map<String, double> openings) {
+List<DayRow> dailyRows(
+  String day,
+  List<Tx> all,
+  List<Account> accounts,
+  Map<String, double> openings,
+) {
   final start = dayStartMs(day);
   final assigned = <int, int?>{
     for (final t in all) t.id: accountFor(t, accounts)?.id,
@@ -242,11 +333,10 @@ List<DayRow> dailyRows(String day, List<Tx> all, List<Account> accounts,
     );
   }
 
-  final rows = <DayRow>[
-    for (final a in accounts) build(a, accountLabel(a)),
-  ];
-  final hasUnassigned =
-      all.any((t) => assigned[t.id] == null && dayKeyTs(t.ts) == day);
+  final rows = <DayRow>[for (final a in accounts) build(a, accountLabel(a))];
+  final hasUnassigned = all.any(
+    (t) => assigned[t.id] == null && dayKeyTs(t.ts) == day,
+  );
   if (hasUnassigned) rows.add(build(null, 'غير مربوط بحساب'));
   return rows;
 }

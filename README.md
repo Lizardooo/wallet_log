@@ -38,6 +38,22 @@ Wallet numbers can still be added or edited later in **الحسابات**.
 - **الذكاء** - Gemini key, free model picker, and the "classify my messages"
   action with progress and results.
 
+### Filters
+
+- Only one date shortcut is selected at a time, even on the first day of the
+  month when "today" and "this month" cover the same dates.
+- Today, yesterday, 7 days and 30 days use local calendar days. "This month"
+  means the first of the current month through the end of today. Custom ranges
+  include both selected days. "All" removes the date restriction.
+- Wallet, operation type, date and in/out filters combine. Multiple operation
+  types are alternatives within the type filter. "Clear all" also resets in/out.
+- The main transactions view contains confirmed operations; pending or unknown
+  operations remain in the separate review view, still filtered by wallet,
+  type and date. A month with no confirmed operations can legitimately be empty.
+- The list summary and transaction Excel export follow the visible filters.
+  Report export follows the report's selected wallet and period, including
+  pending rows with their status (their amounts remain excluded from totals).
+
 ### Accuracy safeguards
 
 - OTP / temporary-code, failed, rejected, pending and promotional messages are
