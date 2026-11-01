@@ -840,7 +840,12 @@ class _TransactionsTabState extends State<TransactionsTab> {
 
   Widget _header(BuildContext context, _DayHeader h) {
     final grey = Theme.of(context).colorScheme.onSurfaceVariant;
-    return Padding(
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: grey, width: 1),
+        ),
+      ),
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
       child: Row(
         children: [
@@ -885,8 +890,12 @@ class _TransactionsTabState extends State<TransactionsTab> {
     ].join(' · ');
     final small = TextStyle(fontSize: 11, color: cs.onSurfaceVariant);
 
-    return InkWell(
-      onTap: () => widget.onTap(t),
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: cs.onSurfaceVariant, width: 1),
+        ),
+      ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(
@@ -909,7 +918,6 @@ class _TransactionsTabState extends State<TransactionsTab> {
                     style: const TextStyle(
                         fontWeight: FontWeight.w600, fontSize: 14),
                   ),
-                  const SizedBox(height: 2),
                   Text(sub, style: small),
                   if (t.note.isNotEmpty)
                     Padding(
@@ -924,10 +932,10 @@ class _TransactionsTabState extends State<TransactionsTab> {
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: small),
-                          ),
-                        ],
-                      ),
+                          ],
+                        ]),
                     ),
+                  ),
                   if (pending)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
@@ -943,9 +951,12 @@ class _TransactionsTabState extends State<TransactionsTab> {
                   if (mm != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: Text('⚠ الرصيد لا يطابق (فرق ${fmt(mm)})',
-                          style: const TextStyle(fontSize: 11, color: _orange)),
+                      child: Text(
+                        '⚠ الرصيد لا يطابق (فرق ${fmt(mm)}',
+                        style: const TextStyle(fontSize: 11, color: _orange)),
+                      ),
                     ),
+                  ],),
                 ],
               ),
             ),

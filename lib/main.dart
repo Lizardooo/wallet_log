@@ -17,8 +17,6 @@ class WalletLogApp extends StatelessWidget {
       title: 'أموالي',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: const Color(0xFF0F766E), useMaterial3: true),
-      builder: (context, child) =>
-          Directionality(textDirection: TextDirection.rtl, child: child!),
       home: const HomePage(),
     );
   }
