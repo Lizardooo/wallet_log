@@ -22,6 +22,7 @@ class WalletLogApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
+      locale: const Locale('ar'),
       supportedLocales: const [Locale('ar'), Locale('en')],
       theme: ThemeData(colorSchemeSeed: const Color(0xFF0F766E), useMaterial3: true),
       home: const HomePage(),
