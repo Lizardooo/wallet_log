@@ -15,6 +15,7 @@ TextCellValue _t(String s) => TextCellValue(s);
 /// summary per wallet number. Column names match what the importer reads, so
 /// an exported file can be imported back.
 List<int>? buildReportXlsx(List<Tx> txs, List<Account> accounts) {
+  txs = txs.where((t) => !t.isExcluded).toList();
   final excel = Excel.createExcel();
   final first = excel.getDefaultSheet() ?? 'Sheet1';
   excel.rename(first, 'المعاملات');
@@ -123,6 +124,7 @@ Future<void> exportExcelReport(
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  txs = txs.where((t) => !t.isExcluded).toList();
   if (txs.isEmpty) {
     snack('لا توجد معاملات لتصديرها');
     return;
