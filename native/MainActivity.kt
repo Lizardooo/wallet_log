@@ -1,11 +1,14 @@
 package com.example.wallet_log
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
+import android.telephony.SubscriptionInfo
 import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -122,20 +125,48 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             null
         } ?: return emptyList()
-        return subs.mapIndexed { index, s ->
-            val number = try {
-                val n = s.number
-                if (n.isNullOrBlank()) null else n
+        val sm = SubscriptionManager.from(applicationContext)
+        return subs.sortedBy { if (it.simSlotIndex >= 0) it.simSlotIndex else Int.MAX_VALUE }
+            .mapIndexed { index, s ->
+                mapOf(
+                    "subId" to s.subscriptionId,
+                    "slot" to if (s.simSlotIndex >= 0) s.simSlotIndex else index,
+                    "carrier" to (s.carrierName?.toString() ?: ""),
+                    "number" to simNumber(sm, s)
+                )
+            }
+    }
+
+    /**
+     * The SIM's own number, when the carrier wrote it on the card. Android 13+
+     * has a dedicated API; older versions use the line-1 number or the
+     * subscription record. Many Egyptian SIMs carry no number at all, in which
+     * case null is returned and the setup asks the owner to type it.
+     */
+    @Suppress("DEPRECATION")
+    @SuppressLint("MissingPermission", "HardwareIds")
+    private fun simNumber(sm: SubscriptionManager, s: SubscriptionInfo): String? {
+        val candidates = mutableListOf<() -> String?>()
+        if (Build.VERSION.SDK_INT >= 33) {
+            candidates.add { sm.getPhoneNumber(s.subscriptionId) }
+        }
+        if (Build.VERSION.SDK_INT >= 24) {
+            candidates.add {
+                getSystemService(TelephonyManager::class.java)
+                    ?.createForSubscriptionId(s.subscriptionId)
+                    ?.line1Number
+            }
+        }
+        candidates.add { s.number }
+        for (c in candidates) {
+            val n = try {
+                c()
             } catch (e: Exception) {
                 null
             }
-            mapOf(
-                "subId" to s.subscriptionId,
-                "slot" to if (s.simSlotIndex >= 0) s.simSlotIndex else index,
-                "carrier" to (s.carrierName?.toString() ?: ""),
-                "number" to number
-            )
+            if (!n.isNullOrBlank()) return n
         }
+        return null
     }
 
     private fun readInbox(result: MethodChannel.Result) {

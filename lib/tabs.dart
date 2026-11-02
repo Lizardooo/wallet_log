@@ -15,6 +15,7 @@ const walletTypes = [
   'InstaPay',
   'Orange Cash',
   'Etisalat Cash / Fawry',
+  'WE Pay',
 ];
 
 const _weekdays = [
@@ -124,7 +125,8 @@ class TxEdit {
 
   final bool exclude;
 
-  const TxEdit(this.note, this.type, this.dir, this.confirm, {this.exclude = false});
+  const TxEdit(this.note, this.type, this.dir, this.confirm,
+      {this.exclude = false});
 }
 
 /// Shows the original SMS next to the parsed result so the owner can verify it,
@@ -217,7 +219,7 @@ Future<TxEdit?> showTxDialog(BuildContext context, Tx t, double? mismatch) {
         actions: [
           TextButton.icon(
             onPressed: () => Navigator.pop(ctx,
-              TxEdit(c.text.trim(), t.type, t.dir, false, exclude: true)),
+                TxEdit(c.text.trim(), t.type, t.dir, false, exclude: true)),
             icon: const Icon(Icons.block),
             label: Text(reviewText(ctx, 'استبعاد', 'Exclude')),
           ),

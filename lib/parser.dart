@@ -96,17 +96,37 @@ final _limitRe = RegExp(
   caseSensitive: false,
 );
 
+// "رسوم 5 جنيه" and the Vodafone Cash form "و 2.34 جنيه رسوم خدمة".
 final _feeRe = RegExp(
   '(?:fees?|commission|charges?|رسوم|عمولة|مصاريف)'
-  '\\D{0,20}?(?:$_cur\\s*)?$_amt(?:\\s*$_cur)?',
+  '\\D{0,20}?(?:$_cur\\s*)?$_amt(?:\\s*$_cur)?|'
+  '$_amt\\s*$_cur\\s*(?:رسوم|عمولة|مصاريف|fees?|commission)',
   caseSensitive: false,
 );
+
+/// Folds the spelling variants wallet SMS use for the same word (أ/إ/آ → ا,
+/// ى → ي, ة → ه, no tatweel or diacritics), so "إستلام", "استلام" and
+/// "الحالى" / "الحالي" are matched by one rule. Only used for keyword matching;
+/// amounts and stored text are never changed.
+String normalizeArabic(String s) => s
+    .replaceAll(RegExp('[أإآٱ]'), 'ا')
+    .replaceAll('ى', 'ي')
+    .replaceAll('ة', 'ه')
+    .replaceAll(RegExp('[\u0640\u064B-\u0652]'), '');
+
+/// Keyword regexes are written in normal spelling and matched against text
+/// folded by [normalizeArabic], so the pattern is folded the same way.
+RegExp _ar(String pattern) => RegExp(normalizeArabic(pattern));
 
 RegExp _cat(List<String> en, List<String> ar) {
   final parts = <String>[];
   if (en.isNotEmpty) parts.add('(?<![a-z])(?:${en.join('|')})(?![a-z])');
-  if (ar.isNotEmpty) parts.add('(?:${ar.join('|')})');
-  return RegExp(parts.join('|'));
+  // "تم ..." must be a word of its own: "سيتم خصم" (will deduct) and "هيتم"
+  // contain "تم خصم" but announce a future operation.
+  final words =
+      ar.map((w) => w.startsWith('تم') ? '(?<![\u0621-\u064A])$w' : w);
+  if (ar.isNotEmpty) parts.add('(?:${words.join('|')})');
+  return _ar(parts.join('|'));
 }
 
 // Messages that must never become transactions.
@@ -139,6 +159,114 @@ final _skip = _cat(
     'منتهي',
     'قيد المعالجة',
     'قيد التنفيذ',
+  ],
+);
+
+// Messages that look financial but report no completed money movement. Wallets
+// send many of these around a real transaction: the request to confirm a
+// payment ("لتأكيد دفع مبلغ 468.30 جنيه لـ MYFAWRY_BP ... اطلب #55*9*"), a
+// money / payment request from someone else, a cash-out code, a statement or
+// "last transactions" list. They are never recorded, whatever else they say.
+final _notTransaction = _cat(
+  [
+    'to confirm',
+    'to complete',
+    'confirm (?:the |your )?(?:payment|transfer|transaction|withdrawal)',
+    'do you want',
+    'reply with',
+    'payment request',
+    'money request',
+    'collect(?:ion)? request',
+    'request(?:ed|s)? (?:money|payment|to pay|you)',
+    'request(?:ed|s)? [^.]{0,40}?from you',
+    'withdrawal code',
+    'cash ?-?out code',
+    'valid (?:for|until|till)',
+    'mini ?-?statement',
+    'last \\d+ transactions',
+  ],
+  [
+    'لتأكيد',
+    'للتأكيد',
+    '(?:برجاء|يرجى|رجاء|من فضلك)\\s*(?:ال)?تأكيد',
+    'لإتمام',
+    'لاستكمال',
+    'لاكمال',
+    'لإكمال',
+    'عشان\\s*(?:تأكد|تكمل|تتمم)',
+    'لو\\s*عايز\\s*تكمل',
+    'هل تريد',
+    'لديك طلب',
+    'عندك طلب',
+    'ب?يطلب منك',
+    'طلب منك',
+    'طلب\\s*(?:تحويل|دفع|تحصيل|سحب|أموال|اموال|فلوس)\\s*(?:من|بمبلغ|ب)',
+    'طلب تحصيل',
+    '(?:كود|رمز|كود رمز)\\s*(?:ال)?(?:سحب|استلام|صرف)',
+    'صالح(?:ة)?\\s*(?:لمدة|حتى|لغاية)',
+    'كشف حساب',
+    'آخر\\s*\\d+\\s*(?:عمليات|معاملات|حركات)',
+  ],
+);
+
+// Reminders, future / scheduled notices and account administration (wallet
+// activation, PIN change, limits, suspension). They are dropped unless the
+// message also states a completed money movement ([_completedMove]): "تم تحويل
+// 100 جنيه ... وسيتم إضافة الكاش باك" is still a transfer.
+final _notice = _cat(
+  [
+    'reminder',
+    'remind',
+    'due',
+    'will be',
+    'upcoming',
+    'scheduled',
+    'activated',
+    'activation',
+    'register(?:ed)?',
+    'registration',
+    'pin',
+    'password',
+    'suspended',
+    'blocked',
+  ],
+  [
+    'تذكير',
+    'نذكرك',
+    'نود تذكيرك',
+    'لا تنس',
+    'متنساش',
+    'موعد',
+    'استحقاق',
+    'مستحق',
+    'سيتم',
+    'هيتم',
+    'سوف',
+    'تفعيل',
+    'تسجيل',
+    'الرقم السري',
+    'الرقم السرى',
+    'كلمة (?:المرور|السر)',
+    'تحديث (?:ال)?بيانات',
+    'إيقاف',
+    'تجميد',
+    'حظر',
+  ],
+);
+
+final _completedMove = _cat(
+  [
+    // "will be debited" is a notice, not a completed movement.
+    '(?<!will be )(?<!will )(?:received|credited|debited|paid|sent|'
+        'transferred|withdrawn|deposited)',
+  ],
+  [
+    'تمت?\\s*(?:عملية\\s*)?(?:ال)?(?:استلام|تحويل|إرسال|ارسال|سحب|إيداع|ايداع|دفع|شحن|خصم|إضافة|اضافة|سداد|استرداد|شراء)',
+    'استلمت',
+    'حولت',
+    'دفعت',
+    'وصلك',
+    'وصلتك',
   ],
 );
 
@@ -196,15 +324,38 @@ final _payment = _cat(
 );
 final _transfer = _cat(
   ['transfer(?:red)?', 'sent', 'send', 'received', 'receive'],
-  ['تحويل', 'حول', 'استلام', 'استلمت', 'وصلك', 'ارسال', 'إرسال', 'استقبال'],
+  [
+    'تحويل',
+    'حول',
+    'استلام',
+    'استلمت',
+    'وصلك',
+    'وصلتك',
+    'ارسال',
+    'إرسال',
+    'ارسلت',
+    'أرسلت',
+    'استقبال',
+  ],
 );
 
 final _strongIn = _cat(
-  ['received', 'receive', 'credited', 'deposit(?:ed)?', 'refund(?:ed)?'],
+  [
+    'received',
+    'receive',
+    'credited',
+    'deposit(?:ed)?',
+    'refund(?:ed)?',
+    'incoming',
+  ],
   [
     'استلمت',
     'استلام',
     'وصلك',
+    'وصلتك',
+    'وارد',
+    'تمت إضافة',
+    'أضيف',
     'وصل إليك',
     'تم اضافة',
     'تم إضافة',
@@ -227,14 +378,29 @@ final _strongOut = _cat(
     'debited',
     'charged',
   ],
-  ['ارسال', 'إرسال', 'دفع', 'سحب', 'خصم', 'شراء', 'سداد'],
+  [
+    'ارسال',
+    'إرسال',
+    'ارسلت',
+    'أرسلت',
+    'حولت',
+    'قمت بتحويل',
+    'صادر',
+    'دفع',
+    'سحب',
+    'خصم',
+    'شراء',
+    'سداد',
+  ],
 );
 
+// Matched against text folded by [normalizeArabic] (so "إلى" reads "الي").
 final _fromRe = RegExp(
-  r'(?:من|(?<![a-z])from)\s*(?:رقم\s*|number\s*)?(01\d{9})',
+  r'(?:من|(?<![a-z])from)\s*(?:ال)?(?:رقم\s*|number\s*)?(01\d{9})',
 );
 final _toRe = RegExp(
-  r'(?:إلى|الى|إلي|الي|(?<![a-z])to)\s*(?:رقم\s*|number\s*)?(01\d{9})',
+  r'(?:(?:الي|الى)\s*(?:ال)?(?:رقم\s*)?|(?<![\u0621-\u064A])لل?\s*(?:رقم\s*)?|'
+  r'(?<![a-z])to\s*(?:number\s*)?)(01\d{9})',
 );
 final _toMe = RegExp(
   r'(?:إلى|الى|إلي|الي|(?<![a-z])to)\s*(?:محفظتك|حسابك|رصيدك|your\s+(?:wallet|account))',
@@ -282,8 +448,11 @@ String normalizeDigits(String s) {
 /// only when its sender matches; wording in the body is never enough, because a
 /// customer-written or phishing SMS can say anything. The body only picks
 /// between providers when the sender itself is shared (e.g. a generic "Cash").
+bool _isWePay(String s) => RegExp(r'we\s*-?\s*pay').hasMatch(s);
+
 bool _trustedSender(String s) =>
     s.contains('cash') ||
+    _isWePay(s) ||
     s.contains('instapay') ||
     s.contains('fawry') ||
     s.contains('vf') ||
@@ -297,6 +466,7 @@ String? detectWallet(String sender, String body) {
   final b = body.toLowerCase();
   if (!_trustedSender(s)) return null;
   if (s.contains('instapay')) return 'InstaPay';
+  if (_isWePay(s)) return 'WE Pay';
   if (s.contains('orange')) return 'Orange Cash';
   if (s.contains('vodafone') || s.contains('vf')) return 'Vodafone Cash';
   if (s.contains('etisalat') || s.contains('e&') || s.contains('fawry')) {
@@ -310,6 +480,7 @@ String? detectWallet(String sender, String body) {
     return 'Orange Cash';
   }
   if (b.contains('vodafone') || b.contains('فودافون')) return 'Vodafone Cash';
+  if (_isWePay(b) || b.contains('وي باي')) return 'WE Pay';
   if (b.contains('etisalat') ||
       b.contains('اتصالات') ||
       b.contains('فوري') ||
@@ -337,7 +508,7 @@ double? _num(String? s) =>
   var fee = 0.0;
   final f = _feeRe.firstMatch(rest);
   if (f != null) {
-    fee = _num(f.group(1)) ?? 0;
+    fee = _num(f.group(1) ?? f.group(2)) ?? 0;
     rest = rest.replaceRange(f.start, f.end, ' ');
   }
   final amounts = _amountRe
@@ -352,10 +523,13 @@ double? _num(String? s) =>
 // Promotional sentences (cash-back offers, "transfer money and win...") often
 // follow the real transaction text. They are removed before parsing so their
 // amounts ("100ج كاش باك") are never mistaken for the transaction.
-final _promo = RegExp(
-  r'(?<![a-z])(?:cash\s*back|offers?|promo(?:tion)?|win|enjoy|hurry)(?![a-z])|'
-  r'(?<![\u0621-\u064A])(?:كاش\s*باك|فرصك|تكسب|جنيه\s*(?:دهب|ذهب)|هيجيلك|'
-  r'حول\s+فلوس|عرض|عروض|احصل\s+على|اشحن|اربح|سارع)',
+final _promo = _ar(
+  r'(?<![a-z])(?:cash\s*back|offers?|promo(?:tion)?|win|enjoy|hurry|discount|'
+  r'coupon|download|limited\s+time|\d+\s*%\s*off)(?![a-z])|'
+  r'(?<![\u0621-\u064A])(?:كاش\s*باك|فرصك|فرصة|تكسب|جنيه\s*(?:دهب|ذهب)|هيجيلك|'
+  r'حول\s+فلوس|عرض|عروض|احصل\s+على|اشحن|اربح|سارع|استمتع|خصم\s*\d+\s*%|'
+  r'\d+\s*%\s*خصم|كوبون|مسابقة|السحب\s+على|حمل\s+(?:تطبيق|ابلكيشن|أبلكيشن)|'
+  r'لفترة\s+محدودة|بادر)',
 );
 
 // Cash-back, rewards, points and gifts are not money movements. The phrase and
@@ -377,7 +551,7 @@ String _stripPromo(String s) {
   // Split on sentence ends only (". " / "! "), so decimals like 114.29 survive.
   return noUrl
       .split(RegExp(r'(?<=[.!؟?])\s+'))
-      .where((part) => !_promo.hasMatch(part.toLowerCase()))
+      .where((part) => !_promo.hasMatch(normalizeArabic(part.toLowerCase())))
       .join(' ');
 }
 
@@ -394,7 +568,12 @@ Parsed? parseSms(String sender, String rawBody) {
   final wallet = detectWallet(sender, full); // the link / footer helps here
   if (wallet == null) return null;
   final body = _stripPromo(full);
-  if (_skip.hasMatch(body.toLowerCase())) return null;
+  final folded = normalizeArabic(body.toLowerCase());
+  if (_skip.hasMatch(folded)) return null;
+  if (_notTransaction.hasMatch(folded)) return null;
+  if (_notice.hasMatch(folded) && !_completedMove.hasMatch(folded)) {
+    return null;
+  }
 
   // A message that only reports a balance has no amount left after the balance
   // is removed, so it is not recorded as a transaction.
@@ -421,7 +600,7 @@ Parsed? parseSms(String sender, String rawBody) {
   final amount = viaWalletDeduction ? dedAmount! : amounts.first;
   var review = !viaWalletDeduction && amounts.toSet().length > 1;
 
-  final l = ex.rest.toLowerCase();
+  final l = normalizeArabic(ex.rest.toLowerCase());
   TxType type;
   if (feeOnly) {
     type = TxType.fee;
@@ -560,6 +739,7 @@ String? walletFromText(String text) {
     return 'Orange Cash';
   }
   if (t.contains('vodafone') || t.contains('فودافون')) return 'Vodafone Cash';
+  if (_isWePay(t) || t.contains('وي باي')) return 'WE Pay';
   if (t.contains('etisalat') ||
       t.contains('اتصالات') ||
       t.contains('e&') ||
@@ -579,12 +759,17 @@ bool isWalletCandidate(String sender, String rawBody) {
   if (s.isEmpty || !RegExp(r'[A-Za-z\u0621-\u064A]').hasMatch(s)) return false;
   final body = normalizeDigits(rawBody);
   if (!_amountRe.hasMatch(body)) return false;
-  final low = body.toLowerCase();
-  if (_skip.hasMatch(low) || _promo.hasMatch(low)) return false;
+  final low = normalizeArabic(body.toLowerCase());
+  if (_skip.hasMatch(low) ||
+      _promo.hasMatch(low) ||
+      _notTransaction.hasMatch(low) ||
+      (_notice.hasMatch(low) && !_completedMove.hasMatch(low))) {
+    return false;
+  }
   final wallet =
       RegExp(r'محفظ|كاش|wallet|cash|instapay|انستا|إنستا').hasMatch(low);
   final move = RegExp(
-          r'تحويل|تم\s+(?:ايداع|إيداع|خصم|سحب|استلام)|حولت|transfer|deposit|withdraw|received|debited|credited|paid')
+          r'تحويل|تم\s+(?:ايداع|خصم|سحب|استلام)|حولت|transfer|deposit|withdraw|received|debited|credited|paid')
       .hasMatch(low);
   return wallet && move;
 }

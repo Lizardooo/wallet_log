@@ -21,6 +21,7 @@ final _failed = RegExp(
     caseSensitive: false);
 final _pending = RegExp(
     r'قيد المعالج|قيد التنفيذ|جاري|جارى|سيتم|انتظر|معلق|يرجى الانتظار|'
+    r'لتأكيد|لتاكيد|للتأكيد|للتاكيد|to confirm|'
     r'pending|processing|in progress|will be|awaiting|please wait',
     caseSensitive: false);
 final _otp = RegExp(r'otp|رمز التحقق|كود التحقق|verification code|one.time',

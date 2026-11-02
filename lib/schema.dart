@@ -24,6 +24,7 @@ const legacyWalletProviderCodes = {
   'Orange Cash': 'orange_cash',
   'Etisalat Cash / Fawry': 'etisalat_cash',
   'InstaPay': 'instapay',
+  'WE Pay': 'we_pay',
 };
 
 /// Providers seeded on first use. Everything is data and can be edited or
