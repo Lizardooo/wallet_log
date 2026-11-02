@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'add_tx_screen.dart';
 import 'db.dart';
 import 'money_engine.dart';
+import 'parser.dart';
 import 'review_strings.dart';
 import 'summary_service.dart';
 import 'suggestions_screen.dart';
@@ -38,7 +39,10 @@ Color statusColor(String status, {bool reversed = false}) {
 /// confirmed number.
 class DashboardTab extends StatefulWidget {
   final int refresh; // bump to reload
-  const DashboardTab({super.key, this.refresh = 0});
+
+  /// Notices shown above everything else (missing numbers, first steps).
+  final List<Widget> header;
+  const DashboardTab({super.key, this.refresh = 0, this.header = const []});
 
   @override
   State<DashboardTab> createState() => _DashboardTabState();
@@ -67,7 +71,7 @@ class _DashboardTabState extends State<DashboardTab> {
     final now = DateTime.now();
     final d =
         await s.dashboard(from: _month ? DateTime(now.year, now.month) : null);
-    final latest = await s.latest(limit: 8);
+    final latest = await s.latest(limit: 5);
     final awaiting = await s.awaiting(limit: 5);
     final n = (await (await TxDb.matches()).pending()).length +
         (await (await TxDb.aiSuggestions()).pending()).length;
@@ -130,6 +134,7 @@ class _DashboardTabState extends State<DashboardTab> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(padding: const EdgeInsets.all(12), children: [
+        ...widget.header,
         Wrap(spacing: 8, children: [
           for (final (value, label) in [
             (true, t(context, 'هذا الشهر', 'This month')),
@@ -228,19 +233,24 @@ class _DashboardTabState extends State<DashboardTab> {
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                          '${w.provider}${w.nickname.isEmpty ? '' : ' · ${w.nickname}'}',
+                      Text(w.nickname.isEmpty ? w.provider : w.nickname,
                           style: Theme.of(context).textTheme.titleSmall),
                       Text([
-                        if (w.phone.isNotEmpty) w.phone,
+                        if (w.phone.isNotEmpty && !w.nickname.contains(w.phone))
+                          w.phone,
                         if (w.totals.pendingCount > 0)
                           t(context, 'معلّق: ${w.totals.pendingCount}',
                               'Pending: ${w.totals.pendingCount}'),
                       ].join(' · ')),
                       Text(
-                          '${t(context, 'الرصيد المؤكد', 'Confirmed balance')}: '
-                          '${w.totals.confirmedBalanceMinor == null ? '—' : formatMinor(w.totals.confirmedBalanceMinor!)}',
-                          style: Theme.of(context).textTheme.titleMedium),
+                          w.totals.confirmedBalanceMinor == null
+                              ? t(context, 'الرصيد: اضغط واكتب رصيد البداية',
+                                  'Balance: tap to set a starting balance')
+                              : '${t(context, 'الرصيد المؤكد', 'Confirmed balance')}: '
+                                  '${formatMinor(w.totals.confirmedBalanceMinor!)}',
+                          style: w.totals.confirmedBalanceMinor == null
+                              ? Theme.of(context).textTheme.bodySmall
+                              : Theme.of(context).textTheme.titleMedium),
                     ]),
               ),
             ),
@@ -259,12 +269,18 @@ class _DashboardTabState extends State<DashboardTab> {
           Text(t(context, 'لا توجد معاملات.', 'No transactions yet.')),
         for (final r in _latest)
           TxTile(row: r, onTap: () => _open(r['id']! as int)),
-        const SizedBox(height: 12),
-        _Report(d: d),
-        const SizedBox(height: 72),
+        const SizedBox(height: 24),
       ]),
     );
   }
+}
+
+/// The Arabic name of a stored type such as "bill".
+String _typeLabel(Object? type) {
+  for (final t in TxType.values) {
+    if (t.name == type) return t.label;
+  }
+  return '';
 }
 
 class TxTile extends StatelessWidget {
@@ -294,7 +310,7 @@ class TxTile extends StatelessWidget {
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(
-                  '${amount == null ? '?' : formatMinor(amount)}  ${row['type'] ?? ''}',
+                  '${amount == null ? '?' : formatMinor(amount)}  ${_typeLabel(row['type'])}',
                   style: Theme.of(context).textTheme.titleSmall),
               Text(
                   '${DateTime.fromMillisecondsSinceEpoch(row['ts']! as int).toString().substring(0, 16)}'
@@ -306,48 +322,6 @@ class TxTile extends StatelessWidget {
                       fontSize: 12)),
             ]),
           ),
-        ]),
-      ),
-    );
-  }
-}
-
-class _Report extends StatelessWidget {
-  final DashboardData d;
-  const _Report({required this.d});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = reviewText;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(t(context, 'ملخص', 'Summary'),
-              style: Theme.of(context).textTheme.titleMedium),
-          Text(t(context, 'الصافي المؤكد', 'Confirmed net') +
-              ': ${formatMinor(d.netMinor)}'),
-          Text(t(context, 'الرسوم المدفوعة', 'Fees paid') +
-              ': ${formatMinor(d.feesMinor)}'),
-          Text(
-              t(context, 'التحويلات بين محافظك لا تُحسب دخلاً ولا إنفاقاً.',
-                  'Moves between your own wallets are not counted as income or spending.'),
-              style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 8),
-          Text(t(context, 'الإنفاق حسب النوع', 'Spending by category'),
-              style: Theme.of(context).textTheme.titleSmall),
-          if (d.spendByType.isEmpty)
-            Text(t(context, 'لا إنفاق مؤكد.', 'No confirmed spending.')),
-          for (final e in d.spendByType.entries)
-            Text('${e.key}: ${formatMinor(e.value)}'),
-          const SizedBox(height: 8),
-          Text(t(context, 'مقارنة المحافظ', 'Wallet comparison'),
-              style: Theme.of(context).textTheme.titleSmall),
-          for (final w in d.wallets)
-            Text(
-                '${w.provider}: ${t(context, 'دخل', 'in')} ${formatMinor(w.totals.confirmedInMinor)} · '
-                '${t(context, 'خرج', 'out')} ${formatMinor(w.totals.confirmedOutMinor)} · '
-                '${t(context, 'معلّق', 'pending')} ${formatMinor(w.totals.pendingInMinor + w.totals.pendingOutMinor)}'),
         ]),
       ),
     );

@@ -50,8 +50,11 @@ Account? accountFor(Tx t, List<Account> accounts) {
   return byNumber.length == 1 ? byNumber.first : null;
 }
 
+/// "Name · number", without repeating a number the name already shows.
 String accountLabel(Account a) =>
-    a.number.isEmpty ? a.name : '${a.name} · ${a.number}';
+    a.number.isEmpty || a.name.contains(a.number)
+        ? a.name
+        : '${a.name} · ${a.number}';
 
 /// In / out / fee totals. Only transactions that need no review are added.
 /// Those flagged for review (anything other than a transfer or a deduction, or

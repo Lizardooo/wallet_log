@@ -6,6 +6,7 @@ import 'db.dart';
 import 'importer.dart';
 import 'logic.dart';
 import 'parser.dart';
+import 'phone_numbers.dart';
 import 'review_strings.dart';
 
 const smsChannel = MethodChannel('wallet_log/sms');
@@ -320,6 +321,7 @@ Future<Account?> editAccount(
   final number = TextEditingController(text: existing?.number ?? '');
   String wallet = existing?.wallet ?? walletTypes.first;
   int? sub = existing?.subId;
+  String? numberError;
   return showDialog<Account>(
     context: context,
     builder: (ctx) => StatefulBuilder(
@@ -341,7 +343,8 @@ Future<Account?> editAccount(
                 TextField(
                   controller: name,
                   decoration: const InputDecoration(
-                    labelText: 'اسم الحساب (مثال: فودافون - هاتف 1)',
+                    labelText: 'اسم تعرفه بيه (اختياري)',
+                    hintText: 'مثلاً: فودافون - موبايل أحمد',
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -361,9 +364,15 @@ Future<Account?> editAccount(
                   ],
                 ),
                 TextField(
+                  key: const ValueKey('account-number'),
                   controller: number,
                   keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(labelText: 'رقم المحفظة'),
+                  textDirection: TextDirection.ltr,
+                  decoration: InputDecoration(
+                    labelText: 'رقم المحفظة',
+                    hintText: '01xxxxxxxxx',
+                    errorText: numberError,
+                  ),
                 ),
                 if (counts.isNotEmpty) ...[
                   const SizedBox(height: 12),
@@ -395,14 +404,22 @@ Future<Account?> editAccount(
             ),
             FilledButton(
               onPressed: () {
-                if (name.text.trim().isEmpty) return;
+                final problem = phoneProblem(number.text);
+                if (problem != null) {
+                  setS(() => numberError = problem);
+                  return;
+                }
+                final n = normalizeEgyptPhone(number.text);
+                final label = name.text.trim().isEmpty
+                    ? '$wallet · $n'
+                    : name.text.trim();
                 Navigator.pop(
                   ctx,
                   Account(
                     id: existing?.id,
-                    name: name.text.trim(),
+                    name: label,
                     wallet: wallet,
-                    number: normalizeDigits(number.text.trim()),
+                    number: n,
                     subId: sub,
                     slot: existing?.slot,
                   ),
@@ -1782,7 +1799,11 @@ class _AccountsTabState extends State<AccountsTab> {
               title: Text(a.name),
               subtitle: Text(
                 '${a.wallet}${a.number.isEmpty ? '' : ' · ${a.number}'}'
-                '${a.slot == null ? '' : ' · شريحة ${a.slot! + 1}'}',
+                '${a.slot == null ? '' : ' · شريحة ${a.slot! + 1}'}'
+                '${a.number.isEmpty ? '\n⚠ الرقم مش مكتوب. اضغط هنا واكتبه.' : ''}',
+                style: a.number.isEmpty
+                    ? const TextStyle(color: _orange)
+                    : null,
               ),
               onTap: () => _edit(a),
               trailing: IconButton(

@@ -13,6 +13,8 @@ import 'review_strings.dart';
 import 'review_tab.dart';
 import 'add_tx_screen.dart';
 import 'dashboard_tab.dart';
+import 'guide_screen.dart';
+import 'more_tab.dart';
 import 'settings_screen.dart';
 import 'tx_detail_screen.dart';
 import 'suggestions_screen.dart';
@@ -34,6 +36,9 @@ class WalletLogApp extends StatelessWidget {
       ],
       locale: const Locale('ar'),
       supportedLocales: const [Locale('ar'), Locale('en')],
+      // Arabic, right to left everywhere, whatever the phone's language.
+      builder: (context, child) =>
+          Directionality(textDirection: TextDirection.rtl, child: child!),
       theme: ThemeData(
         colorSchemeSeed: const Color(0xFF0F766E),
         useMaterial3: true,
@@ -58,7 +63,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Map<int, double> _mismatch = {};
   final TxFilter _filter = TxFilter();
   final TxFilter _reportFilter = TxFilter(period: DatePeriod.thisMonth);
-  int _tab = 5;
+  int _tab = _home;
   int _dashRefresh = 0;
   bool _denied = false;
   bool _scanning = false;
@@ -66,13 +71,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _setupDone = false;
   String? _promptedDay;
 
+  // Tab order. The first tab sits on the right in Arabic (right to left).
+  static const _home = 0;
+  static const _transactions = 1;
+  static const _reports = 3;
   static const _titles = [
+    'أموالي',
     'المعاملات',
-    'التقارير',
-    'الحسابات',
-    'الذكاء الاصطناعي',
     'المراجعة',
-    'الرئيسية',
+    'التقارير',
+    'الإعدادات',
   ];
 
   @override
@@ -92,9 +100,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _afterSetup() async {
     await _reload();
     if (!mounted) return;
-    // The owner finished (or skipped) the wizard: show the reports first.
-    setState(() => _tab = 5);
+    // The owner finished (or skipped) the wizard: start on the home tab.
+    setState(() => _tab = _home);
     await _scan();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: const Text('محتاج شرح؟ هتلاقيه في الإعدادات.'),
+      action: SnackBarAction(label: 'افتح الشرح', onPressed: _openGuide),
+      duration: const Duration(seconds: 8),
+    ));
   }
 
   @override
@@ -137,10 +151,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _scan() async {
+  /// Reads the inbox again. [manual] tells the owner what was found.
+  Future<void> _scan({bool manual = false}) async {
     if (_scanning) return;
     _scanning = true;
     var ok = false;
+    final before = _txs.length;
     try {
       final granted =
           await smsChannel.invokeMethod<bool>('requestPermission') ?? false;
@@ -168,6 +184,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       await TxDb.importSms(raw, accounts: _accounts);
       await _reload();
       ok = true;
+      if (manual && mounted) {
+        final added = _txs.length - before;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(added > 0
+              ? 'اتقرت الرسايل: $added معاملة جديدة.'
+              : 'اتقرت الرسايل: مفيش جديد.'),
+        ));
+      }
     } finally {
       _scanning = false;
     }
@@ -209,6 +233,73 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
     );
     await _reload();
+  }
+
+  Future<void> _push(Widget page) async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => page));
+    await _reload();
+  }
+
+  void _openGuide() => _push(const GuideScreen());
+
+  void _openAccounts() => _push(_AccountsPage(onChanged: _reload));
+
+  void _openAi() => _push(_AiPage(onChanged: _reload));
+
+  void _openSuggestions() => _push(const SuggestionsScreen());
+
+  void _openBackup() => _push(SettingsScreen(onRestored: _reload));
+
+  void _import() =>
+      importExcelReport(context, accounts: _accounts, onDone: _reload);
+
+  /// Notices at the top of the home tab: only what needs doing now.
+  List<Widget> _homeNotices() {
+    final cs = Theme.of(context).colorScheme;
+    final missing = _accounts.where((a) => a.number.isEmpty).length;
+    Widget notice(Key key, IconData icon, String text, String action,
+            VoidCallback onTap) =>
+        Card(
+          key: key,
+          color: Colors.orange.withAlpha(36),
+          child: ListTile(
+            leading: Icon(icon, color: Colors.orange.shade800),
+            title: Text(text, style: const TextStyle(fontSize: 14)),
+            trailing: TextButton(onPressed: onTap, child: Text(action)),
+          ),
+        );
+    return [
+      if (_accounts.isEmpty)
+        notice(
+            const ValueKey('notice-no-accounts'),
+            Icons.sim_card_outlined,
+            'لسه ما ضفتش أرقام محافظك. ضيفها عشان نقرا رسايلها.',
+            'ضيف',
+            _openAccounts)
+      else if (missing > 0)
+        notice(
+            const ValueKey('notice-missing-number'),
+            Icons.dialpad,
+            missing == 1
+                ? 'في محفظة من غير رقم. الموبايل ما عرفش رقمها، اكتبه بنفسك.'
+                : 'في $missing محافظ من غير رقم. الموبايل ما عرفش أرقامها، '
+                    'اكتبها بنفسك.',
+            'اكتب الرقم',
+            _openAccounts),
+      if (_txs.isEmpty)
+        Card(
+          key: const ValueKey('notice-guide'),
+          color: cs.primaryContainer,
+          child: ListTile(
+            leading: Icon(Icons.menu_book, color: cs.onPrimaryContainer),
+            title: Text('أول مرة؟ شوف الشرح خطوة بخطوة',
+                style: TextStyle(color: cs.onPrimaryContainer)),
+            trailing: Icon(Icons.chevron_right, color: cs.onPrimaryContainer),
+            onTap: _openGuide,
+          ),
+        ),
+    ];
   }
 
   Future<void> _excludeTx(Tx t, {String? note}) async {
@@ -260,65 +351,34 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!_setupDone) {
       return OnboardingPage(onDone: _afterSetup);
     }
+    final canExport = _tab == _transactions || _tab == _reports;
     return Scaffold(
       appBar: AppBar(
         leading: Padding(
           padding: const EdgeInsets.all(8),
           child: Image.asset('assets/logo.png'),
         ),
-        title: Text(
-            'أموالي · ${_tab == 4 ? reviewText(context, 'المراجعة', 'Review') : _titles[_tab]}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
+        title: Text(_titles[_tab], maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: reviewText(
-                context, 'الإعدادات والنسخ الاحتياطي', 'Settings & backup'),
-            onPressed: () => Navigator.push(
+          if (canExport)
+            IconButton(
+              icon: const Icon(Icons.download),
+              tooltip: 'تصدير تقرير Excel',
+              onPressed: () => exportExcelReport(
                 context,
-                MaterialPageRoute(
-                    builder: (_) => SettingsScreen(onRestored: () async {
-                          await _reload();
-                          if (mounted) setState(() => _dashRefresh++);
-                        }))),
-          ),
+                txs: _tab == _transactions
+                    ? _txs.where((t) => _filter.matches(t, _accounts)).toList()
+                    : _txs
+                        .where((t) => _reportFilter.matchesBase(t, _accounts))
+                        .toList(),
+                accounts: _accounts,
+              ),
+            ),
           IconButton(
-            icon: const Icon(Icons.lightbulb_outline),
-            tooltip: reviewText(context, 'الاقتراحات', 'Suggestions'),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const SuggestionsScreen())),
-          ),
-          IconButton(
-            icon: const Icon(Icons.download),
-            tooltip: 'تصدير تقرير Excel',
-            onPressed: _tab == 4
-                ? null
-                : () => exportExcelReport(
-                      context,
-                      txs: _tab == 0
-                          ? _txs
-                              .where((t) => _filter.matches(t, _accounts))
-                              .toList()
-                          : _tab == 1
-                              ? _txs
-                                  .where((t) =>
-                                      _reportFilter.matchesBase(t, _accounts))
-                                  .toList()
-                              : _txs,
-                      accounts: _accounts,
-                    ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.upload_file),
-            tooltip: 'استيراد تقرير Excel',
-            onPressed: () => importExcelReport(context,
-                accounts: _accounts, onDone: _reload),
-          ),
-          IconButton(
+            key: const ValueKey('refresh'),
             icon: const Icon(Icons.refresh),
-            tooltip: 'إعادة قراءة الرسائل',
-            onPressed: _scan,
+            tooltip: 'قراءة الرسايل الجديدة',
+            onPressed: () => _scan(manual: true),
           ),
         ],
       ),
@@ -329,12 +389,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    const Icon(Icons.sms_outlined, size: 48),
+                    const SizedBox(height: 12),
                     const Text(
-                      'يحتاج التطبيق إذن قراءة الرسائل لقراءة رسائل المحافظ. تتم المعالجة على هذا الهاتف فقط.',
+                      'التطبيق محتاج إذن قراءة الرسايل عشان يقرا رسايل المحافظ. '
+                      'كل حاجة بتتعمل على الموبايل ده بس.',
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
-                    FilledButton(onPressed: _scan, child: const Text('السماح')),
+                    FilledButton(
+                        onPressed: _scan, child: const Text('اسمح بالقراءة')),
                   ],
                 ),
               ),
@@ -342,6 +406,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           : IndexedStack(
               index: _tab,
               children: [
+                DashboardTab(refresh: _dashRefresh, header: _homeNotices()),
                 TransactionsTab(
                   txs: _txs,
                   accounts: _accounts,
@@ -351,26 +416,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   onTap: _openTx,
                   onRefresh: _scan,
                 ),
-                ReportsTab(
-                  filter: _reportFilter,
-                  txs: _txs,
-                  accounts: _accounts,
-                  onChanged: _reload,
-                ),
-                AccountsTab(
-                  txs: _txs,
-                  accounts: _accounts,
-                  onSave: (a) async {
-                    await TxDb.saveAccount(a);
-                    await _reload();
-                  },
-                  onDelete: (id) async {
-                    await TxDb.deleteAccount(id);
-                    await _reload();
-                  },
-                  onOpenDaily: _openDaily,
-                ),
-                AiTab(txs: _txs, onChanged: _reload),
                 ReviewTab(
                   txs: _txs,
                   accounts: _accounts,
@@ -383,10 +428,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     await _reload();
                   },
                 ),
-                DashboardTab(refresh: _dashRefresh),
+                ReportsTab(
+                  filter: _reportFilter,
+                  txs: _txs,
+                  accounts: _accounts,
+                  onChanged: _reload,
+                ),
+                MoreTab(
+                  accounts: _accounts,
+                  onGuide: _openGuide,
+                  onAccounts: _openAccounts,
+                  onDaily: _openDaily,
+                  onSuggestions: _openSuggestions,
+                  onImport: _import,
+                  onAi: _openAi,
+                  onBackup: _openBackup,
+                ),
               ],
             ),
-      floatingActionButton: (_tab == 0 || _tab == 5)
+      floatingActionButton: _tab == _transactions
           ? FloatingActionButton.extended(
               icon: const Icon(Icons.add),
               label:
@@ -397,35 +457,148 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     MaterialPageRoute(
                         builder: (_) => const AddTransactionScreen()));
                 await _reload();
-                if (mounted) setState(() => _dashRefresh++);
               },
             )
           : null,
       bottomNavigationBar: NavigationBar(
-        labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
         destinations: [
           const NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home),
+              label: 'الرئيسية'),
+          const NavigationDestination(
               icon: Icon(Icons.list_alt), label: 'المعاملات'),
+          NavigationDestination(
+              icon: Badge(
+                isLabelVisible: _reviewCount > 0,
+                label: Text(_reviewCount > 99 ? '99+' : '$_reviewCount'),
+                child: const Icon(Icons.rule),
+              ),
+              label: 'المراجعة'),
           const NavigationDestination(
               icon: Icon(Icons.bar_chart), label: 'التقارير'),
-          const NavigationDestination(
-            icon: Icon(Icons.account_balance_wallet),
-            label: 'الحسابات',
-          ),
-          const NavigationDestination(
-            icon: Icon(Icons.auto_awesome),
-            label: 'الذكاء',
-          ),
           NavigationDestination(
-              icon: const Icon(Icons.rule),
-              label: reviewText(context, 'المراجعة', 'Review')),
-          NavigationDestination(
-              icon: const Icon(Icons.home_outlined),
-              label: reviewText(context, 'الرئيسية', 'Home')),
+              icon: Badge(
+                isLabelVisible: _accounts.isEmpty ||
+                    _accounts.any((a) => a.number.isEmpty),
+                smallSize: 8,
+                child: const Icon(Icons.settings_outlined),
+              ),
+              label: 'الإعدادات'),
         ],
       ),
+    );
+  }
+
+  /// Messages waiting for the owner's decision, shown on the review tab.
+  int get _reviewCount =>
+      _txs.where((t) => !t.isExcluded && (t.review || t.isUnknown)).length;
+}
+
+/// Wallet numbers and the daily reminder, opened from the settings tab. It
+/// reloads its own data so edits show at once.
+class _AccountsPage extends StatefulWidget {
+  final Future<void> Function() onChanged;
+  const _AccountsPage({required this.onChanged});
+
+  @override
+  State<_AccountsPage> createState() => _AccountsPageState();
+}
+
+class _AccountsPageState extends State<_AccountsPage> {
+  List<Account>? _accounts;
+  List<Tx> _txs = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final a = await TxDb.accounts();
+    final t = await TxDb.allTx();
+    if (mounted) {
+      setState(() {
+        _accounts = a;
+        _txs = t;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accounts = _accounts;
+    return Scaffold(
+      appBar: AppBar(title: const Text('محافظي وأرقامي')),
+      body: accounts == null
+          ? const Center(child: CircularProgressIndicator())
+          : AccountsTab(
+              txs: _txs,
+              accounts: accounts,
+              onSave: (a) async {
+                await TxDb.saveAccount(a);
+                await _load();
+                await widget.onChanged();
+              },
+              onDelete: (id) async {
+                await TxDb.deleteAccount(id);
+                await _load();
+                await widget.onChanged();
+              },
+              onOpenDaily: () async {
+                final openings = await TxDb.openings();
+                if (!context.mounted) return;
+                await Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => DailyPage(
+                      txs: _txs, accounts: accounts, openings: openings),
+                ));
+              },
+            ),
+    );
+  }
+}
+
+/// The optional Gemini classification, opened from the settings tab.
+class _AiPage extends StatefulWidget {
+  final Future<void> Function() onChanged;
+  const _AiPage({required this.onChanged});
+
+  @override
+  State<_AiPage> createState() => _AiPageState();
+}
+
+class _AiPageState extends State<_AiPage> {
+  List<Tx>? _txs;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final t = await TxDb.allTx();
+    if (mounted) setState(() => _txs = t);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final txs = _txs;
+    return Scaffold(
+      appBar: AppBar(title: const Text('الذكاء الاصطناعي')),
+      body: txs == null
+          ? const Center(child: CircularProgressIndicator())
+          : AiTab(
+              txs: txs,
+              onChanged: () async {
+                await _load();
+                await widget.onChanged();
+              },
+            ),
     );
   }
 }

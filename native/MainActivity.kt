@@ -5,7 +5,9 @@ import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
+import android.telephony.SubscriptionInfo
 import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -122,13 +124,9 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             null
         } ?: return emptyList()
+        val manager = SubscriptionManager.from(applicationContext)
         return subs.mapIndexed { index, s ->
-            val number = try {
-                val n = s.number
-                if (n.isNullOrBlank()) null else n
-            } catch (e: Exception) {
-                null
-            }
+            val number = simNumber(manager, s)
             mapOf(
                 "subId" to s.subscriptionId,
                 "slot" to if (s.simSlotIndex >= 0) s.simSlotIndex else index,
@@ -136,6 +134,32 @@ class MainActivity : FlutterActivity() {
                 "number" to number
             )
         }
+    }
+
+    /**
+     * The SIM's own number, trying every source Android offers: the Android 13
+     * API, the older subscription field, then the per-SIM telephony line.
+     * Many carriers never write the number on the SIM, so null is common and
+     * the app then asks the owner to type it.
+     */
+    @Suppress("DEPRECATION")
+    private fun simNumber(manager: SubscriptionManager, s: SubscriptionInfo): String? {
+        val tries = mutableListOf<() -> String?>()
+        if (Build.VERSION.SDK_INT >= 33) {
+            tries.add { manager.getPhoneNumber(s.subscriptionId) }
+        }
+        tries.add { s.number }
+        if (Build.VERSION.SDK_INT >= 24) {
+            tries.add {
+                val tm = getSystemService(TelephonyManager::class.java)
+                tm?.createForSubscriptionId(s.subscriptionId)?.line1Number
+            }
+        }
+        for (t in tries) {
+            val n = try { t() } catch (e: Exception) { null }
+            if (!n.isNullOrBlank()) return n
+        }
+        return null
     }
 
     private fun readInbox(result: MethodChannel.Result) {

@@ -12,15 +12,47 @@ Opening the app for the first time shows a short setup instead of the tabs:
 
 1. **شرائحك ومحافظك** - the app lists the phone's SIMs with their slot, carrier
    and number when the phone reports it. Tick each number that carries a wallet
-   and choose its wallet type(s); type the number by hand when it is not
-   detected. Only messages for the chosen wallets are stored.
+   and choose its wallet type(s). When the phone cannot read a SIM's number
+   the app says so and asks you to type it. Only messages for the chosen wallets are stored.
 2. **الذكاء الاصطناعي** - optional: paste a Gemini API key, let the app list the
    free models available to that key, and pick one.
 
-Finishing (or "تخطي الآن") stores the setup and opens the **التقارير** tab.
-Wallet numbers can still be added or edited later in **الحسابات**.
+Finishing (or "تخطي الآن") stores the setup and opens the **الرئيسية** tab.
+Wallet numbers can still be added or edited later in **الإعدادات ← محافظي
+وأرقامي**.
 
 ## Screens (Arabic, right-to-left)
+
+The app only reads wallet SMS; it is not a wallet and never moves money. The
+bottom bar has five tabs, first on the right: **الرئيسية**, **المعاملات**,
+**المراجعة** (with a count of messages waiting), **التقارير** and
+**الإعدادات**. The top bar only carries "read new messages" (and Excel export on
+the transactions and reports tabs).
+
+**الإعدادات** holds everything that is not daily work: the step-by-step guide
+**إزاي أستخدم التطبيق؟** (plain Egyptian Arabic, a real screenshot per step with
+numbered red rings on what to tap, and common questions), wallet numbers and the
+reminder, daily balance, suggestions, Excel import, the optional AI and backup.
+
+### Wallet numbers
+
+The setup reads each SIM's number from the phone (Android 13 API, then the
+older subscription field, then the SIM's line number) and cleans it to
+`01xxxxxxxxx`. Many carriers never store the number on the SIM; then the SIM's
+card says so in orange and setup does not continue until the number of every
+ticked SIM is typed (11 digits, 010 / 011 / 012 / 015). The carrier suggests the
+wallet type and the prefix. Wallets saved without a number are flagged on the
+home tab and in settings until the number is entered.
+
+The guide screenshots in `assets/guide/` are made by
+`test/guide_screenshots_test.dart` from the real screens with made-up messages:
+
+```
+GUIDE_SCREENSHOTS=assets/guide \
+GUIDE_FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
+GUIDE_ICON_FONT=<flutter>/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf \
+flutter test test/guide_screenshots_test.dart
+```
 
 - **المعاملات** - every wallet operation, grouped by day with in / out / fee
   totals. Filters: wallet number, operation type (transfer, cash in, cash out,
@@ -35,10 +67,10 @@ Wallet numbers can still be added or edited later in **الحسابات**.
   choice is remembered.
 - **التقارير** - totals by wallet number and the busiest counterparty numbers,
   for today / 7 days / 30 days / this month / all, plus **Excel import**.
-- **الحسابات** - add your own wallet numbers on this phone, and turn on the
-  daily reminder notification.
-- **الذكاء** - Gemini key, free model picker, and the "classify my messages"
-  action with progress and results.
+- **الإعدادات ← محافظي وأرقامي** - add your own wallet numbers on this phone,
+  and turn on the daily reminder notification.
+- **الإعدادات ← الذكاء الاصطناعي** - Gemini key, free model picker, and the
+  "classify my messages" action with progress and results.
 
 ### Filters
 
@@ -85,14 +117,14 @@ pre-filled with the last balance seen in the SMS before that day.
 
 Messages are matched to a wallet number by wallet type. If one phone has two
 numbers of the same type (dual SIM), the SIM chosen during setup (or in
-**الحسابات**) decides which number a message belongs to. When wallet numbers
+**الإعدادات ← محافظي وأرقامي**) decides which number a message belongs to. When wallet numbers
 are chosen during setup, messages for wallet types that were not chosen are
 skipped.
 
 ## AI classification (Gemini)
 
 1. Create an API key at <https://aistudio.google.com/apikey>.
-2. Paste it in **الذكاء** (or in the setup wizard) and press
+2. Paste it in **الإعدادات ← الذكاء الاصطناعي** (or in the setup wizard) and press
    **جلب الموديلات المجانية**. The app asks Google which models the key can use,
    hides non-text models, and marks the free-tier families (flash / flash-lite /
    gemma). Pick one; **عرض الكل** shows the rest.

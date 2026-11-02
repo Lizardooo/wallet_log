@@ -82,18 +82,18 @@ void main() {
       }
       await tester.pumpAndSettle();
       expect(find.byType(NavigationBar), findsOneWidget);
-      final destination = find
-          .byType(NavigationDestination)
-          .at(4); // Review (Home was appended as the sixth tab)
+      // Home, Transactions, Review, Reports, Settings: Home is first, so it
+      // sits on the right in Arabic.
+      expect(find.byType(NavigationDestination), findsNWidgets(5));
+      final destination = find.byType(NavigationDestination).at(2);
       await tester.tap(destination);
       await tester.pumpAndSettle();
       expect(find.byType(ReviewTab), findsOneWidget);
+      // Export only belongs to the transactions and reports tabs.
       expect(
-          tester
-              .widget<IconButton>(find.byWidgetPredicate(
-                  (w) => w is IconButton && w.tooltip == 'تصدير تقرير Excel'))
-              .onPressed,
-          isNull);
+          find.byWidgetPredicate(
+              (w) => w is IconButton && w.tooltip == 'تصدير تقرير Excel'),
+          findsNothing);
       expect(tester.takeException(), isNull);
       final screenshotDir = Platform.environment['REVIEW_SCREENSHOTS'];
       if (screenshotDir != null) {
@@ -111,7 +111,7 @@ void main() {
           tester
               .widget<NavigationBar>(find.byType(NavigationBar))
               .selectedIndex,
-          4);
+          2);
     });
   }
 }

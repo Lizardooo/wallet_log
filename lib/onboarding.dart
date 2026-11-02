@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'db.dart';
 import 'gemini.dart';
-import 'parser.dart';
+import 'phone_numbers.dart';
 import 'tabs.dart';
 
 const _green = Color(0xFF0F766E);
@@ -21,6 +21,9 @@ class _SimDraft {
     this.carrier = '',
     String numberText = '',
   }) : number = TextEditingController(text: numberText);
+
+  /// The number came from the phone itself (not typed).
+  bool detected = false;
 
   bool get selected => active && wallets.isNotEmpty;
 
@@ -95,7 +98,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
             subId: (rawSub != null && rawSub >= 0) ? rawSub : null,
             slot: (rawSlot == null || rawSlot < 0) ? i : rawSlot,
             carrier: (m['carrier'] as String?) ?? '',
-            number: normalizeDigits(((m['number'] as String?) ?? '').trim()),
+            number: normalizeEgyptPhone((m['number'] as String?) ?? ''),
           ));
         }
       }
@@ -120,7 +123,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
             slot: s.slot,
             carrier: s.carrier,
             numberText: s.number,
-          ));
+          )..detected = s.number.isNotEmpty);
         }
       }
     });
@@ -170,7 +173,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
       if (!skipped) {
         for (final d in _simDrafts) {
           if (!d.selected) continue;
-          final number = normalizeDigits(d.number.text.trim());
+          final number = normalizeEgyptPhone(d.number.text);
           if (number.isEmpty && d.subId == null) continue;
           for (final wallet in d.wallets) {
             await TxDb.saveAccount(Account(
@@ -214,11 +217,16 @@ class _OnboardingPageState extends State<OnboardingPage> {
         ));
         return;
       }
-      final missing = chosen.any((d) =>
-          normalizeDigits(d.number.text.trim()).isEmpty && d.subId == null);
-      if (missing) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('اكتب رقم المحفظة للرقم اللي اخترته.'),
+      // Every chosen number must be known: the phone often cannot read it
+      // from the SIM, and then the owner types it.
+      for (final d in chosen) {
+        final problem = phoneProblem(d.number.text);
+        if (problem == null) continue;
+        final where = d.slot == null ? 'الرقم الإضافي' : 'شريحة ${d.slot! + 1}';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(d.number.text.trim().isEmpty
+              ? 'الموبايل ما قالناش رقم $where. اكتبه بنفسك في خانة الرقم.'
+              : '$where: $problem'),
         ));
         return;
       }
@@ -243,7 +251,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
     };
     return Scaffold(
       appBar: AppBar(
-        title: Text('إعداد أموالي · $title'),
+        title: Text(title),
         automaticallyImplyLeading: false,
         actions: [
           TextButton(
@@ -307,9 +315,8 @@ class _OnboardingPageState extends State<OnboardingPage> {
       padding: const EdgeInsets.all(16),
       children: [
         const Text(
-          'اختر الأرقام اللي عليها محافظ أو محافظ إلكترونية. هنقرأ رسايل '
-          'المحافظ من الشرائح المختارة ونحسب معاملاتها. لو الرقم مش ظاهر، '
-          'اكتبه يدوياً.',
+          'علّم على كل شريحة عليها محفظة واختار نوعها. التطبيق بيحاول يعرف '
+          'رقم الشريحة لوحده، ولو ما عرفش هيطلب منك تكتبه.',
           style: TextStyle(fontSize: 13),
         ),
         const SizedBox(height: 8),
@@ -322,8 +329,8 @@ class _OnboardingPageState extends State<OnboardingPage> {
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
             child: Text(
-              'لم نقدر نقرأ شرائح الهاتف تلقائياً. اكتب رقم كل شريحة ومحفظتها '
-              'يدوياً.',
+              'ما قدرناش نقرا شرايح الموبايل. اكتب رقم كل شريحة عليها محفظة '
+              'واختار نوعها.',
               style: TextStyle(fontSize: 12, color: Colors.orange),
             ),
           )
@@ -382,16 +389,47 @@ class _OnboardingPageState extends State<OnboardingPage> {
               ],
             ),
             const SizedBox(height: 8),
+            if (!d.detected)
+              Container(
+                key: ValueKey('sim-missing-$index'),
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withAlpha(30),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.info_outline,
+                        size: 18, color: Colors.orange),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        d.subId == null
+                            ? 'اكتب رقم المحفظة هنا.'
+                            : 'الموبايل ما قالناش رقم الشريحة دي. لو عليها '
+                                'محفظة، اكتب رقمها هنا عشان نربط الرسايل بيه.',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             TextField(
               controller: d.number,
               keyboardType: TextInputType.phone,
               textDirection: TextDirection.ltr,
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 labelText: 'رقم الشريحة / المحفظة',
-                hintText: '01xxxxxxxxx',
-                helperText: d.subId == null
-                    ? 'اكتب الرقم يدوياً'
-                    : 'اتركه فارغاً لو الرقم مش معروف',
+                hintText: '${carrierPrefix(d.carrier) ?? '01'}xxxxxxxx'
+                    '${carrierPrefix(d.carrier) == null ? 'x' : ''}',
+                helperText: d.detected ? 'الرقم ده الموبايل عرفه لوحده ✓' : null,
+                errorText: d.active && d.number.text.trim().isNotEmpty
+                    ? phoneProblem(d.number.text)
+                    : null,
                 border: const OutlineInputBorder(),
                 isDense: true,
               ),
@@ -418,7 +456,18 @@ class _OnboardingPageState extends State<OnboardingPage> {
               ),
             ],
             InkWell(
-              onTap: () => setState(() => d.active = !d.active),
+              onTap: () => setState(() {
+                d.active = !d.active;
+                // Guess the wallet from the carrier; the owner can change it.
+                if (d.active && d.wallets.isEmpty) {
+                  final w = switch (carrierPrefix(d.carrier)) {
+                    '010' => 'Vodafone Cash',
+                    '012' => 'Orange Cash',
+                    _ => null,
+                  };
+                  if (w != null && walletTypes.contains(w)) d.wallets.add(w);
+                }
+              }),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Row(

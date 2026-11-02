@@ -121,15 +121,10 @@ class _ReviewTabState extends State<ReviewTab> {
         child: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 960),
       child: ListView(padding: const EdgeInsets.all(12), children: [
-        Text(
-            reviewText(
-                context, 'المراجعة والاستبعادات', 'Review and exclusions'),
-            style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 8),
         Text(reviewText(
             context,
-            'الرسائل المؤجلة أو غير المالية أو المحسوبة سابقًا لا تدخل الأرصدة أو التقارير أو التصدير أو تصنيف الذكاء الاصطناعي.',
-            'Deferred, non-transaction and already-recorded messages do not enter balances, reports, exports or AI classification.')),
+            'رسايل التطبيق مش متأكد منها. افتح الرسالة وأكّدها عشان تتحسب، أو استبعدها.',
+            'Messages the app is not sure about. Open one and confirm it to count it, or exclude it.')),
         const SizedBox(height: 12),
         DropdownButtonFormField<ReviewBucket>(
           initialValue: _bucket,
