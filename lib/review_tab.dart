@@ -194,12 +194,19 @@ class _ReviewTabState extends State<ReviewTab> {
                     child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Text(rule.wallet),
-                          Text(rule.match == ExclusionMatch.exact
-                              ? reviewText(
-                                  context, 'مطابقة النص الكامل', 'Exact text')
-                              : reviewText(context, 'يحتوي على العبارة',
-                                  'Contains phrase')),
+                          Text(rule.wallet.isEmpty
+                              ? reviewText(context, 'كل المحافظ', 'All wallets')
+                              : rule.wallet),
+                          Text(switch (rule.match) {
+                            ExclusionMatch.exact => reviewText(
+                                context, 'مطابقة النص الكامل', 'Exact text'),
+                            ExclusionMatch.contains => reviewText(
+                                context, 'يحتوي على العبارة', 'Contains phrase'),
+                            ExclusionMatch.template => reviewText(
+                                context,
+                                'نفس النص (الأرقام بتتغير) · رسايل المراجعة بس',
+                                'Same text, any numbers · waiting messages only'),
+                          }),
                           const SizedBox(height: 8),
                           SelectableText(rule.text),
                           Align(

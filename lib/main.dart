@@ -306,7 +306,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final decision = await showExclusionDialog(context, t, _txs);
     if (decision == null) return;
     await TxDb.exclude(t.id, decision.disposition,
-        match: decision.match, text: decision.text);
+        match: decision.match,
+        text: decision.text,
+        similar: decision.similar);
     if (note != null && note != t.note) await TxDb.setNote(t.id, note);
     await _reload();
   }

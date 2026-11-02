@@ -7,7 +7,11 @@ class ExclusionDecision {
   final TxDisposition disposition;
   final ExclusionMatch? match;
   final String? text;
-  const ExclusionDecision(this.disposition, {this.match, this.text});
+
+  /// Also exclude waiting messages with the same text (numbers ignored).
+  final bool similar;
+  const ExclusionDecision(this.disposition,
+      {this.match, this.text, this.similar = false});
 }
 
 Future<ExclusionDecision?> showExclusionDialog(
@@ -33,6 +37,7 @@ class _ExclusionDialogState extends State<_ExclusionDialog> {
   late final TextEditingController _text;
   TxDisposition _disposition = TxDisposition.ignored;
   bool _future = false;
+  bool _similar = true;
   ExclusionMatch _match = ExclusionMatch.exact;
 
   @override
@@ -58,6 +63,16 @@ class _ExclusionDialogState extends State<_ExclusionDialog> {
                 (_match == ExclusionMatch.exact
                     ? normalizeExclusionText(t.body) == pattern
                     : normalizeExclusionText(t.body).contains(pattern)))
+            .length;
+    final template = messageTemplate(widget.tx.body);
+    final similar = template.isEmpty
+        ? 0
+        : widget.messages
+            .where((t) =>
+                t.id != widget.tx.id &&
+                !t.isExcluded &&
+                (t.review || t.isUnknown) &&
+                messageTemplate(t.body) == template)
             .length;
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -90,8 +105,28 @@ class _ExclusionDialogState extends State<_ExclusionDialog> {
                       setState(() {
                         _disposition = value;
                         if (value != TxDisposition.ignored) _future = false;
+                        // A duplicate has the same text as the real message.
+                        _similar = value == TxDisposition.ignored;
                       });
                   },
+                ),
+                SwitchListTile(
+                  key: const ValueKey('exclude-similar'),
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(reviewText(
+                      context,
+                      'استبعد كل رسايل المراجعة اللي ليها نفس النص',
+                      'Also exclude waiting messages with the same text')),
+                  subtitle: Text(reviewText(
+                      context,
+                      'حتى لو الأرقام والمبالغ مختلفة · $similar رسالة دلوقتي، '
+                          'وأي رسالة جاية بنفس النص. المعاملات المحسوبة مش بتتأثر.',
+                      'Even if numbers and amounts differ · $similar now, and '
+                          'any new one like it. Counted transactions are never touched.')),
+                  value: _similar,
+                  onChanged: template.isEmpty
+                      ? null
+                      : (v) => setState(() => _similar = v),
                 ),
                 const SizedBox(height: 8),
                 Text(reviewText(
@@ -167,7 +202,8 @@ class _ExclusionDialogState extends State<_ExclusionDialog> {
                   context,
                   ExclusionDecision(_disposition,
                       match: _future ? _match : null,
-                      text: _future ? _text.text : null));
+                      text: _future ? _text.text : null,
+                      similar: _similar && template.isNotEmpty));
             },
             child: Text(reviewText(context, 'استبعاد', 'Exclude'))),
       ],

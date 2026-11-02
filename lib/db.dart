@@ -207,12 +207,14 @@ class TxDb {
         await applyV7(d);
         await applyV8(d);
         await applyV9(d);
+        await applyV10(d);
       },
       onUpgrade: migrate,
     );
     // Wallets made by the setup wizard exist only as legacy accounts until now.
     await syncLegacyAccounts(opened);
     await autoLinkTransactions(opened);
+    await _applyTemplateRules(opened);
     return _db = opened;
   }
 
@@ -328,6 +330,7 @@ class TxDb {
       );
     }
     await batch.commit(noResult: true);
+    await _applyTemplateRules(db);
     // A delayed SMS may belong to a record typed in by hand: only suggest.
     await autoLinkTransactions(db);
     await MatchService(db).suggestAll();
@@ -383,7 +386,7 @@ class TxDb {
         reversed: reversedIds.contains(r['id']),
         source: (r['source'] as String?) ?? 'sms',
         accountId: r['linked_account'] as int?,
-        exclusionRuleId: rule?.id,
+        exclusionRuleId: rule?.id ?? r['excluded_by_rule'] as int?,
         ruleExempt: exempt,
       );
     }).toList();
@@ -486,6 +489,7 @@ class TxDb {
                 aiInputHash((row['body'] as String?) ?? '', kind: '${u.id}'));
         saved.add(u.id);
       }
+      await _applyTemplateRules(txn);
       return saved;
     });
   }
@@ -515,9 +519,11 @@ class TxDb {
         ExclusionRule(
             id: r['id'] as int,
             wallet: r['wallet'] as String,
-            match: r['match_mode'] == 'contains'
-                ? ExclusionMatch.contains
-                : ExclusionMatch.exact,
+            match: switch (r['match_mode']) {
+              'contains' => ExclusionMatch.contains,
+              'template' => ExclusionMatch.template,
+              _ => ExclusionMatch.exact,
+            },
             text: r['pattern'] as String)
     ];
   }
@@ -527,11 +533,15 @@ class TxDb {
 
   /// Store a deliberate decision separately from parser/manual/AI provenance.
   /// A future rule applies retroactively and to new matching messages.
+  ///
+  /// [similar]: also exclude, now and from now on, every message waiting for
+  /// review whose text is the same once numbers are ignored.
   static Future<void> exclude(
     int id,
     TxDisposition disposition, {
     ExclusionMatch? match,
     String? text,
+    bool similar = false,
   }) async {
     if (disposition == TxDisposition.active) {
       throw ArgumentError('Use restoreToReview to restore a message');
@@ -560,7 +570,54 @@ class TxDb {
       await txn.update(
           'tx', {'disposition': disposition.name, 'rule_exempt': 0},
           where: 'id = ?', whereArgs: [id]);
+      if (similar) {
+        final template = messageTemplate((rows.first['body'] as String?) ?? '');
+        if (template.isNotEmpty) {
+          await txn.insert(
+              'exclusion_rules',
+              {
+                'wallet': '',
+                'match_mode': ExclusionMatch.template.name,
+                'pattern': template,
+              },
+              conflictAlgorithm: ConflictAlgorithm.ignore);
+          await _applyTemplateRules(txn);
+        }
+      }
     });
+  }
+
+  /// Excludes every message still waiting for review that has the same text
+  /// (numbers ignored) as a "same text" rule. Counted transactions, messages
+  /// the owner restored by hand, and confirmed ones are never touched.
+  static Future<int> _applyTemplateRules(DatabaseExecutor db) async {
+    final rules = (await _rules(db))
+        .where((r) => r.match == ExclusionMatch.template)
+        .toList();
+    if (rules.isEmpty) return 0;
+    final rows = await db.query('tx',
+        columns: ['id', 'body'],
+        where: "disposition = 'active' AND rule_exempt = 0 "
+            "AND (review = 1 OR dir = 'unknown') AND reverses_tx_id IS NULL");
+    var n = 0;
+    for (final row in rows) {
+      final body = (row['body'] as String?) ?? '';
+      if (body.trim().isEmpty) continue;
+      for (final rule in rules) {
+        if (!rule.matchesTemplate(body)) continue;
+        await db.update(
+            'tx',
+            {
+              'disposition': TxDisposition.ignored.name,
+              'excluded_by_rule': rule.id,
+            },
+            where: 'id = ?',
+            whereArgs: [row['id']]);
+        n++;
+        break;
+      }
+    }
+    return n;
   }
 
   /// Restoring never silently counts an operation. This exact record is exempt
@@ -573,6 +630,7 @@ class TxDb {
           'disposition': TxDisposition.active.name,
           'review': 1,
           'rule_exempt': 1,
+          'excluded_by_rule': null,
         },
         where: 'id = ?',
         whereArgs: [id]);
@@ -584,6 +642,22 @@ class TxDb {
       final rules = await _rules(txn);
       final selected = rules.where((r) => r.id == id).toList();
       if (selected.isEmpty) return;
+      if (selected.single.match == ExclusionMatch.template) {
+        // Bring back exactly what this rule excluded; another same-text rule
+        // may still apply.
+        await txn.update(
+            'tx',
+            {
+              'disposition': TxDisposition.active.name,
+              'review': 1,
+              'excluded_by_rule': null,
+            },
+            where: 'excluded_by_rule = ?',
+            whereArgs: [id]);
+        await txn.delete('exclusion_rules', where: 'id = ?', whereArgs: [id]);
+        await _applyTemplateRules(txn);
+        return;
+      }
       final rows = await txn.query('tx',
           where: "disposition = 'active' AND rule_exempt = 0");
       final batch = txn.batch();
@@ -680,6 +754,7 @@ class TxDb {
       added++;
     }
     await batch.commit(noResult: true);
+    await _applyTemplateRules(db);
     return added;
   }
 

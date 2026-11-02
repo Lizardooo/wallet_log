@@ -107,6 +107,19 @@ flutter test test/guide_screenshots_test.dart
 - The SMS templates are not public, so the rules were built from the operations
   Egyptian wallets offer, not from real messages. Send real samples to tune them.
 
+### Excluding messages with the same text
+
+When a message is excluded from review, the switch **استبعد كل رسايل المراجعة
+اللي ليها نفس النص** (on by default for "ignore") also excludes every message
+still waiting for review whose text is the same once all numbers (amounts,
+phones, balances, dates, references) are ignored. This is done on the phone,
+without AI. It becomes a rule listed under review rules, so new messages with
+the same text are excluded as soon as they are read. It never touches counted
+or confirmed transactions, nor a message restored by hand; deleting the rule
+returns exactly the messages it excluded to review. Messages ignored before
+this version become such rules on upgrade (duplicates do not, because a
+duplicate has the same text as the real message).
+
 ### Opening balance
 
 Each day the app asks for every wallet's opening balance (a dialog on opening

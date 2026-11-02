@@ -12,10 +12,11 @@ import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 
 import 'confirmation_rules.dart';
+import 'exclusions.dart';
 import 'money_engine.dart';
 import 'parser.dart';
 
-const schemaVersion = 9;
+const schemaVersion = 10;
 
 /// Wallet-provider names used by the older `accounts` / `tx.wallet` columns,
 /// mapped to the provider codes seeded below.
@@ -666,6 +667,30 @@ Future<void> applyV9(DatabaseExecutor d) async {
       'legacy confirmation re-judged: $confirmed completed, $failed failed, $unverified unverified');
 }
 
+/// v9 -> v10: remembers which "same text" rule excluded a message, so
+/// deleting the rule brings exactly those messages back. Additive.
+///
+/// Messages the owner already chose to ignore become "same text" rules, so
+/// waiting messages like them are excluded too (on the next read). Messages
+/// marked as duplicates are left alone: a duplicate has the same text as the
+/// real one.
+Future<void> applyV10(DatabaseExecutor d) async {
+  await addColumn(d, 'tx', 'excluded_by_rule', 'INTEGER');
+  final ignored = await d.rawQuery(
+      "SELECT body FROM tx WHERE disposition = 'ignored' "
+      "AND reverses_tx_id IS NULL AND body IS NOT NULL AND body <> ''");
+  final templates = {
+    for (final r in ignored) messageTemplate(r['body']! as String)
+  }..remove('');
+  for (final t in templates) {
+    await d.insert(
+        'exclusion_rules', {'wallet': '', 'match_mode': 'template', 'pattern': t},
+        conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+  await logMigration(d, 9, 10, 'same-text exclusion rules',
+      '${templates.length} from messages already ignored');
+}
+
 /// Runs the whole upgrade and refuses (by throwing, which rolls the migration
 /// back) if any existing transaction row would be lost.
 Future<void> migrate(Database d, int oldV, int newV) async {
@@ -691,6 +716,7 @@ Future<void> migrate(Database d, int oldV, int newV) async {
   if (oldV < 7) await applyV7(d);
   if (oldV < 8) await applyV8(d);
   if (oldV < 9) await applyV9(d);
+  if (oldV < 10) await applyV10(d);
   if (before != null && await _count(d, 'tx') != before) {
     throw StateError('migration would change the transaction count; aborted');
   }
