@@ -30,7 +30,9 @@ Wallet numbers can still be added or edited later in **الحسابات**.
   remark. Transactions analysed by the model show its one-line reasoning.
 - **اليومي** - per wallet number and per day: opening balance, in, out and the
   expected remaining. It is compared with the last balance printed in that day's
-  SMS and flags any difference.
+  SMS and flags any difference. The **إظهار معاملات اليوم** switch lists each
+  wallet's transactions for that day under its summary, or hides them; the
+  choice is remembered.
 - **التقارير** - totals by wallet number and the busiest counterparty numbers,
   for today / 7 days / 30 days / this month / all, plus **Excel import**.
 - **الحسابات** - add your own wallet numbers on this phone, and turn on the
@@ -120,6 +122,12 @@ In **التقارير**, press **استيراد تقرير Excel (.xlsx)**:
   assumes: date, amount, type, description.
 - Sheets, recognized columns, the number of rows and a short preview are shown
   before anything is saved.
+- **الملف جاي من أي محفظة؟** - once wallets are set up, the import dialog asks
+  which wallet the file belongs to (required). Every row is linked to that
+  wallet, overriding any wallet column in the file, so reports from several
+  phones can be collected on one phone and each appears under its own number
+  in **اليومي**. The same rows imported for two different wallets are kept
+  apart; importing again for the same wallet adds nothing.
 - Amounts may be `1,250.50`, `١٢٥٠٫٥`, `(300)` or `-300 جنيه`. Dates may be real
   date cells, `2026-10-01`, `02/10/2026 14:30` or an Excel serial number. Rows
   without a date take the date of the row above.

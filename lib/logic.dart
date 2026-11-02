@@ -19,6 +19,13 @@ int dayStartMs(String key) {
 /// Matches by wallet type, then by SIM (subscription id) when several numbers
 /// share a wallet type. Returns null when it cannot tell.
 Account? accountFor(Tx t, List<Account> accounts) {
+  // An Excel file imported for a chosen wallet keeps that choice, even when
+  // several numbers of the same wallet type live on other phones.
+  if (t.source == 'excel' && t.accountId != null) {
+    for (final a in accounts) {
+      if (a.id == t.accountId) return a;
+    }
+  }
   final sameWallet = accounts.where((a) => a.wallet == t.wallet).toList();
   if (sameWallet.isNotEmpty) {
     if (t.subId != null) {
@@ -277,6 +284,9 @@ class DayRow {
   final int unknown;
   final double? reported; // last balance printed in that day's SMS
 
+  /// That day's transactions for this wallet, oldest first.
+  final List<Tx> txs;
+
   const DayRow({
     required this.account,
     required this.label,
@@ -289,6 +299,7 @@ class DayRow {
     required this.pending,
     required this.unknown,
     required this.reported,
+    this.txs = const [],
   });
 
   double? get expected =>
@@ -354,6 +365,7 @@ List<DayRow> dailyRows(
       pending: totals.pending,
       unknown: totals.unknown,
       reported: reported,
+      txs: dayTx,
     );
   }
 

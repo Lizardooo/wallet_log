@@ -312,7 +312,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           IconButton(
             icon: const Icon(Icons.upload_file),
             tooltip: 'استيراد تقرير Excel',
-            onPressed: () => importExcelReport(context, onDone: _reload),
+            onPressed: () => importExcelReport(context,
+                accounts: _accounts, onDone: _reload),
           ),
           IconButton(
             icon: const Icon(Icons.refresh),

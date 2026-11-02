@@ -1089,8 +1089,36 @@ class DailyTab extends StatefulWidget {
   State<DailyTab> createState() => _DailyTabState();
 }
 
+/// Settings key: whether the daily report lists each wallet's transactions.
+const settingDailyShowTx = 'daily_show_tx';
+
 class _DailyTabState extends State<DailyTab> {
   DateTime _day = DateTime.now();
+  bool _showTx = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadShowTx();
+  }
+
+  Future<void> _loadShowTx() async {
+    try {
+      final v = await TxDb.setting(settingDailyShowTx);
+      if (mounted && v != null) setState(() => _showTx = v == '1');
+    } catch (_) {
+      // Keep the default (hidden) when settings cannot be read.
+    }
+  }
+
+  Future<void> _setShowTx(bool v) async {
+    setState(() => _showTx = v);
+    try {
+      await TxDb.setSetting(settingDailyShowTx, v ? '1' : '0');
+    } catch (_) {
+      // The choice still applies until the page is closed.
+    }
+  }
 
   void _shift(int days) {
     setState(() => _day = DateTime(_day.year, _day.month, _day.day + days));
@@ -1186,8 +1214,55 @@ class _DailyTabState extends State<DailyTab> {
             ),
           ),
         ),
+        SwitchListTile(
+          key: const ValueKey('daily-show-tx'),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+          title: const Text('إظهار معاملات اليوم'),
+          subtitle: const Text(
+            'عرض عمليات كل محفظة تحت ملخصها',
+            style: TextStyle(fontSize: 12),
+          ),
+          value: _showTx,
+          onChanged: _setShowTx,
+        ),
         for (final r in rows) _card(r, key),
       ],
+    );
+  }
+
+  Widget _txLine(Tx t) {
+    final cs = Theme.of(context).colorScheme;
+    final pending = t.review || t.isUnknown;
+    final color = pending ? _orange : dirColor(t.dir);
+    final sign = t.isIn ? '+' : (t.isOut ? '-' : '');
+    final what = [
+      timeOf(t.ts),
+      t.type.label,
+      if (t.party != null && t.party!.isNotEmpty) t.party!,
+    ].join(' · ');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              pending ? '$what · تحتاج مراجعة' : what,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$sign${fmt(t.amount)}',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1255,6 +1330,14 @@ class _DailyTabState extends State<DailyTab> {
                   style: const TextStyle(color: _orange, fontSize: 12),
                 ),
               ),
+            if (_showTx) ...[
+              const Divider(height: 16),
+              if (r.txs.isEmpty)
+                const Text('لا توجد معاملات في هذا اليوم',
+                    style: TextStyle(fontSize: 12))
+              else
+                for (final t in r.txs) _txLine(t),
+            ],
           ],
         ),
       ),
@@ -1360,6 +1443,7 @@ class _ReportsTabState extends State<ReportsTab> {
   Future<void> _importExcel() => importExcelReport(
         context,
         account: _selectedAccount(),
+        accounts: widget.accounts,
         onDone: widget.onChanged,
       );
 
@@ -1720,11 +1804,13 @@ class _AccountsTabState extends State<AccountsTab> {
 
 // ------------------------------------------------------------- excel import
 
-/// Imports a report the owner exported from Excel / Google Sheets. The sheet
-/// and the recognized columns are shown before anything is stored.
+/// Imports a report the owner exported from Excel / Google Sheets. The sheet,
+/// the recognized columns and the wallet the file came from are chosen before
+/// anything is stored. [account] only preselects that wallet.
 Future<void> importExcelReport(
   BuildContext context, {
   Account? account,
+  required List<Account> accounts,
   required Future<void> Function() onDone,
 }) async {
   void snack(String text) {
@@ -1774,28 +1860,48 @@ Future<void> importExcelReport(
       return;
     }
     if (!context.mounted) return;
-    final sheet = await showDialog<SheetImport>(
+    final choice = await showDialog<_ImportChoice>(
       context: context,
-      builder: (ctx) => _ImportDialog(sheets: workbook.sheets),
+      builder: (ctx) => _ImportDialog(
+        sheets: workbook.sheets,
+        accounts: accounts,
+        initial: account,
+      ),
     );
-    if (sheet == null) return;
-    final added = await TxDb.importRows(sheet.rows, account: account);
+    if (choice == null) return;
+    final sheet = choice.sheet;
+    final target = choice.account;
+    final added = await TxDb.importRows(sheet.rows, account: target);
     await onDone();
+    final to = target == null ? 'التقارير' : 'محفظة ${accountLabel(target)}';
     snack(
       added == 0
           ? 'كل صفوف "${sheet.name}" موجودة بالفعل، لم يتغير شيء.'
-          : 'تم استيراد $added معاملة من "${sheet.name}" إلى التقارير.',
+          : 'تم استيراد $added معاملة من "${sheet.name}" إلى $to.',
     );
   } catch (e) {
     snack('تعذر استيراد الملف: $e');
   }
 }
 
-/// Lets the owner pick a sheet and shows what was understood before importing.
+class _ImportChoice {
+  final SheetImport sheet;
+  final Account? account;
+  const _ImportChoice(this.sheet, this.account);
+}
+
+/// Lets the owner pick a sheet and the wallet the file came from, and shows
+/// what was understood before importing.
 class _ImportDialog extends StatefulWidget {
   final List<SheetImport> sheets;
+  final List<Account> accounts;
+  final Account? initial;
 
-  const _ImportDialog({required this.sheets});
+  const _ImportDialog({
+    required this.sheets,
+    required this.accounts,
+    this.initial,
+  });
 
   @override
   State<_ImportDialog> createState() => _ImportDialogState();
@@ -1803,10 +1909,17 @@ class _ImportDialog extends StatefulWidget {
 
 class _ImportDialogState extends State<_ImportDialog> {
   int _index = 0;
+  int? _accountId;
 
   @override
   void initState() {
     super.initState();
+    final initial = widget.initial?.id;
+    if (initial != null && widget.accounts.any((a) => a.id == initial)) {
+      _accountId = initial;
+    } else if (widget.accounts.length == 1) {
+      _accountId = widget.accounts.single.id;
+    }
     for (var i = 1; i < widget.sheets.length; i++) {
       if (widget.sheets[i].rows.length > widget.sheets[_index].rows.length) {
         _index = i;
@@ -1817,6 +1930,12 @@ class _ImportDialogState extends State<_ImportDialog> {
   @override
   Widget build(BuildContext context) {
     final s = widget.sheets[_index];
+    Account? account;
+    for (final a in widget.accounts) {
+      if (a.id == _accountId) account = a;
+    }
+    // With wallets set up, the file must say which one it belongs to.
+    final ready = widget.accounts.isEmpty || account != null;
     return AlertDialog(
       title: const Text('استيراد تقرير Excel'),
       content: SingleChildScrollView(
@@ -1839,6 +1958,43 @@ class _ImportDialogState extends State<_ImportDialog> {
                       onSelected: (_) => setState(() => _index = i),
                     ),
                 ],
+              ),
+              const SizedBox(height: 8),
+            ],
+            if (widget.accounts.isNotEmpty) ...[
+              DropdownButtonFormField<int>(
+                key: const ValueKey('import-wallet'),
+                initialValue: _accountId,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'الملف جاي من أي محفظة؟',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                items: [
+                  for (final a in widget.accounts)
+                    DropdownMenuItem(
+                      value: a.id,
+                      child: Text(
+                        accountLabel(a),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: (v) => setState(() => _accountId = v),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'كل صفوف الملف تتسجل على المحفظة دي وتظهر تحتها في التقرير '
+                'اليومي، حتى لو الملف فيه عمود محفظة.',
+                style: TextStyle(fontSize: 11),
+              ),
+              const SizedBox(height: 8),
+            ] else ...[
+              const Text(
+                'لا توجد محافظ مضافة: الصفوف ستظهر "غير مربوط بحساب" وتحتاج '
+                'مراجعة. أضف المحافظ من تبويب "الحسابات" أولاً لتقسيمها.',
+                style: TextStyle(fontSize: 11, color: _orange),
               ),
               const SizedBox(height: 8),
             ],
@@ -1882,7 +2038,9 @@ class _ImportDialogState extends State<_ImportDialog> {
           child: const Text('إلغاء'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(context, s),
+          onPressed: ready
+              ? () => Navigator.pop(context, _ImportChoice(s, account))
+              : null,
           child: Text('استيراد ${s.rows.length}'),
         ),
       ],

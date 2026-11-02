@@ -45,6 +45,11 @@ class Tx {
   final bool reversed;
   final String source;
 
+  /// The owner's wallet number this row was explicitly imported for (an Excel
+  /// file imported "from" that wallet). Null when the row was not linked by
+  /// hand; matching then falls back to wallet type and SIM.
+  final int? accountId;
+
   const Tx({
     required this.id,
     required this.ts,
@@ -68,6 +73,7 @@ class Tx {
     this.reversalOf,
     this.reversed = false,
     this.source = 'sms',
+    this.accountId,
   });
 
   bool get isExcluded => disposition != TxDisposition.active;
@@ -329,7 +335,10 @@ class TxDb {
 
   static Future<List<Tx>> allTx() async {
     final db = await _database;
-    final rows = await db.query('tx', orderBy: 'ts DESC, id DESC');
+    final rows = await db.rawQuery(
+        'SELECT tx.*, w.legacy_account_id AS linked_account FROM tx '
+        'LEFT JOIN wallet_accounts w ON w.id = tx.wallet_account_id '
+        'ORDER BY tx.ts DESC, tx.id DESC');
     final rules = await _rules(db);
     final reversedIds = {
       for (final r in rows)
@@ -373,6 +382,7 @@ class TxDb {
         reversalOf: r['reverses_tx_id'] as int?,
         reversed: reversedIds.contains(r['id']),
         source: (r['source'] as String?) ?? 'sms',
+        accountId: r['linked_account'] as int?,
         exclusionRuleId: rule?.id,
         ruleExempt: exempt,
       );
@@ -605,6 +615,11 @@ class TxDb {
   /// Inserts rows read from an Excel report. Rows already present (same key) are
   /// skipped, so importing the same file twice changes nothing. Imported rows
   /// are marked manual so the SMS scan never re-classifies them.
+  ///
+  /// When [account] is given (the owner chose which wallet the file came from)
+  /// every row is linked to that wallet, overriding any wallet column in the
+  /// file, so the daily report shows it under that number. The same rows
+  /// imported for two different wallets are kept apart.
   static Future<int> importRows(List<ImportRow> rows,
       {Account? account}) async {
     if (rows.isEmpty) return 0;
@@ -613,20 +628,32 @@ class TxDb {
     final present = <String>{
       for (final r in keys) (r['k'] as String?) ?? '',
     };
+    final accountId = account?.id;
+    int? walletAccountId;
+    if (accountId != null) {
+      final w = await db.query('wallet_accounts',
+          columns: ['id'],
+          where: 'legacy_account_id = ? AND archived = 0',
+          whereArgs: [accountId]);
+      if (w.isNotEmpty) walletAccountId = w.first['id'] as int;
+    }
     final batch = db.batch();
     var added = 0;
     for (final row in rows) {
-      if (present.contains(row.key)) continue;
-      present.add(row.key);
+      final key = accountId == null ? row.key : '${row.key}|a$accountId';
+      // An older import of the same row without a wallet also counts.
+      if (present.contains(key) || present.contains(row.key)) continue;
+      present.add(key);
       final fromFile =
           row.wallet.isNotEmpty && row.wallet != excelWalletFallback;
-      final wallet = fromFile ? row.wallet : (account?.wallet ?? row.wallet);
-      final subId = fromFile ? null : account?.subId;
+      final wallet = account?.wallet ?? row.wallet;
+      final subId = account?.subId;
       final hasWallet = fromFile || account != null;
       batch.insert(
         'tx',
         {
-          'k': row.key,
+          'k': key,
+          'wallet_account_id': walletAccountId,
           'ts': row.ts,
           'wallet': wallet,
           'dir': dirString(row.dir),
