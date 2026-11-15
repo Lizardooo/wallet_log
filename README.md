@@ -145,6 +145,11 @@ token in the app, then press **مزامنة المحافظ**. The dashboard rece
 active local transactions and uses a stable device/transaction key, so pressing
 sync again updates existing rows instead of duplicating them.
 
+These records are an independent business-transfer ledger for tracking money
+sent and received through the shop's wallet numbers. They do not represent
+supermarket sales, purchases, payments, treasury movements, or accounting
+entries.
+
 ## Tuning the parser
 
 SMS templates vary and change. The rules are in `lib/parser.dart`. Add a few
