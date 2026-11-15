@@ -136,6 +136,15 @@ In **التقارير**, press **استيراد تقرير Excel (.xlsx)**:
 
 Pushing to GitHub also builds the APK (Actions tab, artifact `wallet-log-apk`).
 
+## Supermarket dashboard sync
+
+The **الإعدادات والنسخ الاحتياطي** screen can send the local wallet accounts and
+transactions to the supermarket dashboard. Set the same strong random value in
+the supermarket `.env` as `WALLET_SYNC_TOKEN`, enter the dashboard URL and that
+token in the app, then press **مزامنة المحافظ**. The dashboard receives only
+active local transactions and uses a stable device/transaction key, so pressing
+sync again updates existing rows instead of duplicating them.
+
 ## Tuning the parser
 
 SMS templates vary and change. The rules are in `lib/parser.dart`. Add a few

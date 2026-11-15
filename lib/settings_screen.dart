@@ -9,6 +9,7 @@ import 'backup_service.dart';
 import 'db.dart';
 import 'ledger_service.dart';
 import 'review_strings.dart';
+import 'wallet_sync_service.dart';
 
 /// Backup and restore. A backup is the database plus every evidence file plus
 /// a hash manifest; the Gemini key is never included. Excel export is not a
@@ -25,6 +26,50 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _busy = false;
   String? _message;
+  final _endpoint = TextEditingController();
+  final _token = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSyncSettings();
+  }
+
+  Future<void> _loadSyncSettings() async {
+    _endpoint.text = await TxDb.setting(WalletSyncService.endpointKey) ?? '';
+    _token.text = await TxDb.setting(WalletSyncService.tokenKey) ?? '';
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _endpoint.dispose();
+    _token.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sync() async {
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      await TxDb.setSetting(WalletSyncService.endpointKey, _endpoint.text.trim());
+      await TxDb.setSetting(WalletSyncService.tokenKey, _token.text.trim());
+      final result = await WalletSyncService.sync(
+        endpoint: _endpoint.text,
+        token: _token.text,
+      );
+      if (mounted) {
+        setState(() => _message =
+            'تمت المزامنة: ${result['inserted'] ?? 0} جديدة، ${result['updated'] ?? 0} محدثة.');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _message = '$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _backup() async {
     setState(() {
@@ -150,6 +195,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Padding(
               padding: const EdgeInsets.only(top: 12),
               child: SelectableText(_message!)),
+        const SizedBox(height: 28),
+        Text(t(context, 'مزامنة لوحة التحكم', 'Dashboard sync'),
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(t(context, 'أدخل رابط لوحة supermarket ورمز WALLET_SYNC_TOKEN ثم اضغط مزامنة.',
+            'Enter the supermarket URL and WALLET_SYNC_TOKEN, then sync.')),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _endpoint,
+          keyboardType: TextInputType.url,
+          decoration: InputDecoration(
+              labelText: t(context, 'رابط لوحة التحكم', 'Dashboard URL'),
+              hintText: 'https://example.com'),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _token,
+          obscureText: true,
+          decoration: InputDecoration(
+              labelText: t(context, 'رمز المزامنة', 'Sync token')),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          onPressed: _busy ? null : _sync,
+          icon: const Icon(Icons.sync),
+          label: Text(t(context, 'مزامنة المحافظ', 'Sync wallets')),
+        ),
       ]),
     );
   }
