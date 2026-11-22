@@ -11,6 +11,7 @@ import 'onboarding.dart';
 import 'ledger_service.dart';
 import 'review_strings.dart';
 import 'wallet_sync_service.dart';
+import 'privacy_disclosures.dart';
 
 /// Backup and restore. A backup is the database plus every evidence file plus
 /// a hash manifest; the Gemini key is never included. Excel export is not a
@@ -27,6 +28,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _busy = false;
   String? _message;
+  bool _includeMessageText = false;
   final _endpoint = TextEditingController();
   final _token = TextEditingController();
 
@@ -37,9 +39,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadSyncSettings() async {
-    _endpoint.text = await TxDb.setting(WalletSyncService.endpointKey) ?? '';
-    _token.text = await TxDb.setting(WalletSyncService.tokenKey) ?? '';
-    if (mounted) setState(() {});
+    try {
+      final endpoint = await TxDb.setting(WalletSyncService.endpointKey) ?? '';
+      final token = await TxDb.syncToken();
+      if (!mounted) return;
+      setState(() {
+        _endpoint.text = endpoint;
+        _token.text = token;
+      });
+    } catch (_) {
+      if (mounted)
+        setState(() => _message =
+            'تعذر فتح التخزين الآمن. لن يُحفظ رمز المزامنة في قاعدة البيانات.');
+    }
   }
 
   @override
@@ -50,26 +62,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _sync() async {
+    if (_busy) return;
+    final endpoint = _endpoint.text.trim();
+    final token = _token.text.trim();
+    final includeMessageText = _includeMessageText;
     setState(() {
       _busy = true;
       _message = null;
     });
     try {
-      await TxDb.setSetting(
-          WalletSyncService.endpointKey, _endpoint.text.trim());
-      await TxDb.setSetting(WalletSyncService.tokenKey, _token.text.trim());
+      final target = WalletSyncService.validatedEndpoint(endpoint);
+      if (token.isEmpty) throw StateError('أدخل رمز المزامنة أولاً.');
+      if (!mounted) return;
+      final confirmed = await showSyncDisclosure(context, target,
+          includeMessageText: includeMessageText);
+      if (!confirmed || !mounted) return;
+      await TxDb.setSyncToken(token);
+      await TxDb.setSetting(WalletSyncService.endpointKey, endpoint);
       final result = await WalletSyncService.sync(
-        endpoint: _endpoint.text,
-        token: _token.text,
+        endpoint: target.toString(),
+        token: token,
+        confirmed: true,
+        includeMessageText: includeMessageText,
       );
       if (mounted) {
         setState(() => _message =
             'تمت المزامنة: ${result['inserted'] ?? 0} جديدة، ${result['updated'] ?? 0} محدثة.');
       }
-    } catch (e) {
-      if (mounted) setState(() => _message = '$e');
+    } catch (_) {
+      // Do not display server bodies, credentials or arbitrary exception text.
+      if (mounted)
+        setState(() => _message =
+            'لم تكتمل المزامنة. استخدم HTTPS وتحقق من الرابط والرمز والتخزين الآمن. '
+                'قد يكون الخادم استلم البيانات إذا انقطع الاتصال؛ تحقق قبل إعادة المحاولة.');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _forgetSyncToken() async {
+    try {
+      await TxDb.setSyncToken('');
+      if (mounted)
+        setState(() {
+          _token.clear();
+          _message =
+              'حُذف رمز المزامنة من هذا الهاتف. لا يحذف ذلك بيانات الخادم.';
+        });
+    } catch (_) {
+      if (mounted)
+        setState(() => _message = 'تعذر حذف الرمز من التخزين الآمن.');
     }
   }
 
@@ -197,8 +239,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 8),
         Text(t(
             context,
-            'النسخة تشمل قاعدة البيانات وكل ملفات الإثبات وسجل التدقيق. لا تشمل مفتاح Gemini. ملف Excel ليس نسخة احتياطية.',
-            'A backup holds the database, every evidence file and the audit history. It does not include your Gemini key. An Excel export is not a backup.')),
+            'النسخة تشمل قاعدة البيانات وكل ملفات الإثبات وسجل التدقيق. لا تشمل مفتاح Gemini أو رمز المزامنة. ملف Excel ليس نسخة احتياطية.',
+            'A backup holds the database, every evidence file and the audit history. It excludes your Gemini key and sync token. An Excel export is not a backup.')),
         const SizedBox(height: 12),
         FilledButton.icon(
             onPressed: _busy ? null : _backup,
@@ -223,11 +265,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 8),
         Text(t(
             context,
-            'أدخل رابط لوحة supermarket ورمز WALLET_SYNC_TOKEN ثم اضغط مزامنة.',
-            'Enter the supermarket URL and WALLET_SYNC_TOKEN, then sync.')),
+            'المزامنة إرسال خارجي اختياري وليست معالجة محلية. استخدم رابط HTTPS للوحة تثق بها. ستراجع الوجهة والبيانات قبل كل إرسال؛ لا تتم مزامنة تلقائية.',
+            'Sync is optional external sharing. Use an HTTPS dashboard you trust. Review the destination and data before every manual sync.')),
         const SizedBox(height: 8),
         TextField(
           controller: _endpoint,
+          enabled: !_busy,
           keyboardType: TextInputType.url,
           decoration: InputDecoration(
               labelText: t(context, 'رابط لوحة التحكم', 'Dashboard URL'),
@@ -236,15 +279,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 8),
         TextField(
           controller: _token,
+          enabled: !_busy,
+          autocorrect: false,
+          enableSuggestions: false,
           obscureText: true,
           decoration: InputDecoration(
               labelText: t(context, 'رمز المزامنة', 'Sync token')),
         ),
         const SizedBox(height: 12),
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          value: _includeMessageText,
+          onChanged: _busy
+              ? null
+              : (value) => setState(() => _includeMessageText = value ?? false),
+          title: const Text('تضمين نصوص رسائل المعاملات كاملة'),
+          subtitle: const Text(
+              'اختياري ومتوقف افتراضياً. قد تحتوي الرسائل على بيانات شخصية. '
+              'بيانات الحسابات والمبالغ والطرف الآخر تُرسل حتى بدون النصوص.'),
+        ),
+        TextButton.icon(
+          onPressed: _busy ? null : _forgetSyncToken,
+          icon: const Icon(Icons.key_off),
+          label: const Text('حذف رمز المزامنة المحفوظ'),
+        ),
         FilledButton.icon(
           onPressed: _busy ? null : _sync,
           icon: const Icon(Icons.sync),
-          label: Text(t(context, 'مزامنة المحافظ', 'Sync wallets')),
+          label: Text(t(context, 'مراجعة وإرسال', 'Review & send')),
         ),
       ]),
     );
