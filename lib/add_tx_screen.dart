@@ -9,6 +9,7 @@ import 'money_engine.dart';
 import 'parser.dart';
 import 'review_strings.dart';
 import 'wallet_store.dart';
+import 'sim_setup.dart';
 
 /// Records a transaction by hand (before or without the wallet SMS) and lets
 /// proof be attached straight away or later. Nothing here confirms anything:
@@ -47,10 +48,22 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     super.initState();
     () async {
       final w = await (await TxDb.wallets()).wallets();
+      final accounts = await TxDb.accounts();
+      final settings = await TxDb.allSettings();
+      final defaults = accounts
+          .where(
+              (a) => settings[defaultWalletKey(a.subId, a.number)] == a.wallet)
+          .toList();
+      final preferred = w
+          .where((row) => defaults.any(
+              (a) => a.wallet == row.providerName && a.number == row.phone))
+          .toList();
       if (!mounted) return;
       setState(() {
         _wallets = w;
-        if (w.length == 1) _wallet = w.first.id;
+        if (w.length == 1)
+          _wallet = w.first.id;
+        else if (preferred.length == 1) _wallet = preferred.single.id;
       });
     }();
   }
@@ -170,6 +183,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           if (_wallets.isEmpty)
             Text(t(context, 'أضف محفظة أولاً.', 'Add a wallet first.')),
           DropdownButtonFormField<int>(
+            key: ValueKey('wallet:$_wallet:${_wallets.length}'),
             initialValue: _wallet,
             decoration:
                 InputDecoration(labelText: t(context, 'المحفظة', 'Wallet')),
