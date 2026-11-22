@@ -601,3 +601,30 @@ String? extractReference(String body) {
   if (v == null || !RegExp(r'\d').hasMatch(v)) return null;
   return v.toUpperCase();
 }
+
+/// Reads an explicitly stated wallet balance without inventing a transaction.
+/// Multiple balance fields, failed/pending messages and promotional-only text
+/// remain unknown. Sender matching is only a filter, not sender authentication.
+String? statedWalletBalance(String sender, String rawBody) {
+  final full = normalizeDigits(rawBody);
+  if (detectWallet(sender, full) == null) return null;
+  final body = _stripPromo(full);
+  if (_skip.hasMatch(body.toLowerCase())) return null;
+  // Keep this display-only reader stricter than transaction extraction: do
+  // not skip arbitrary words or a minus sign to find an unrelated number.
+  final explicit = RegExp(
+      '(?:balance|رصيدك|رصيد\\s+(?:المحفظة|محفظتك|حسابك|الحالي|المتاح|الجديد)|'
+      'الرصيد\\s+(?:الحالي|المتاح|الجديد|المتبقي|بعد))'
+      '\\s*(?:(?:الحالي|المتاح|الجديد|هو|الآن|الان|is|now|[:=])\\s*){0,4}'
+      '(?:$_cur\\s*)?$_amt',
+      caseSensitive: false);
+  if (_balanceRe.allMatches(body).length != 1) return null;
+  final matches = explicit.allMatches(body).toList();
+  if (matches.length != 1) return null;
+  final m = matches.single;
+  // Reject partial numeric matches (malformed grouping or decimal marks).
+  if (m.end < body.length && RegExp(r'[\d.,]').hasMatch(body[m.end])) {
+    return null;
+  }
+  return m.group(1);
+}
