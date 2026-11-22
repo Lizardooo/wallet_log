@@ -18,6 +18,7 @@ import 'tx_detail_screen.dart';
 import 'suggestions_screen.dart';
 import 'wallet_sms_balance.dart';
 import 'opening_dialog.dart';
+import 'privacy_disclosures.dart';
 import 'parser.dart' show smsKey, detectWallet;
 
 void main() => runApp(const WalletLogApp());
@@ -142,11 +143,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _scan() async {
+  Future<void> _scan({bool explicit = false}) async {
     if (_scanning) return;
     _scanning = true;
     var ok = false;
     try {
+      final consent = await TxDb.setting(smsConsentKey);
+      if (consent != 'accepted') {
+        if (consent == 'declined' && !explicit) return;
+        if (!mounted) return;
+        final accepted = await showSmsDisclosure(context);
+        await TxDb.setSetting(
+            smsConsentKey, accepted ? 'accepted' : 'declined');
+        if (!accepted || !mounted) {
+          if (mounted) setState(() => _denied = true);
+          return;
+        }
+      }
+      if (!mounted) return;
       final granted =
           await smsChannel.invokeMethod<bool>('requestPermission') ?? false;
       if (!granted) {
@@ -345,7 +359,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'إعادة قراءة الرسائل',
-            onPressed: _scan,
+            onPressed: () => _scan(explicit: true),
           ),
         ],
       ),
@@ -357,11 +371,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Text(
-                      'يحتاج التطبيق إذن قراءة الرسائل لقراءة رسائل المحافظ. تتم المعالجة على هذا الهاتف فقط.',
+                      'قراءة رسائل المحافظ متوقفة. التحليل الأساسي محلي، وGemini والمزامنة ميزتان خارجيتان اختياريتان. يمكنك تفعيل قراءة الرسائل أو متابعة التطبيق بدونها.',
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
-                    FilledButton(onPressed: _scan, child: const Text('السماح')),
+                    FilledButton(
+                        onPressed: () => _scan(explicit: true),
+                        child: const Text('مراجعة إذن الرسائل')),
+                    TextButton(
+                        onPressed: () => setState(() => _denied = false),
+                        child: const Text('متابعة بدون رسائل')),
                   ],
                 ),
               ),
@@ -376,7 +395,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   mismatches: _mismatch,
                   onChanged: () => setState(() {}),
                   onTap: _openTx,
-                  onRefresh: _scan,
+                  onRefresh: () => _scan(explicit: true),
                 ),
                 ReportsTab(
                   filter: _reportFilter,
