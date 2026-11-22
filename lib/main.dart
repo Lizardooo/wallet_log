@@ -16,6 +16,8 @@ import 'dashboard_tab.dart';
 import 'settings_screen.dart';
 import 'tx_detail_screen.dart';
 import 'suggestions_screen.dart';
+import 'wallet_sms_balance.dart';
+import 'parser.dart' show smsKey, detectWallet;
 
 void main() => runApp(const WalletLogApp());
 
@@ -65,6 +67,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _ready = false;
   bool _setupDone = false;
   String? _promptedDay;
+  Map<int, SmsWalletBalance> _smsBalances = {};
+  Map<int, SmsWalletBalance> _preDayBalances = {};
 
   static const _titles = [
     'المعاملات',
@@ -165,6 +169,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
         );
       }
+      final excludedKeys = {
+        for (final tx in _txs.where((t) => t.isExcluded))
+          smsKey(tx.body, tx.ts),
+      };
+      final balanceMessages = raw.where((sms) {
+        if (excludedKeys.contains(smsKey(sms.body, sms.ts))) return false;
+        final provider = detectWallet(sms.sender, sms.body);
+        return provider != null &&
+            matchingExclusionRule(_exclusionRules, provider, sms.body) == null;
+      }).toList();
+      final latest = latestSmsBalances(balanceMessages, _accounts);
+      final preDay = latestSmsBalances(balanceMessages, _accounts,
+          before: dayStartMs(dayKey(DateTime.now())));
+      if (mounted) {
+        setState(() {
+          _smsBalances = latest;
+          _preDayBalances = preDay;
+        });
+      }
       await TxDb.importSms(raw, accounts: _accounts);
       await _reload();
       ok = true;
@@ -184,13 +207,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _promptedDay = today;
     if (missing.isEmpty) return;
 
-    final rows = dailyRows(today, _txs, _accounts, _openings);
-    final prefill = <int, double?>{};
-    for (final r in rows) {
-      final id = r.account?.id;
-      if (id != null) prefill[id] = r.opening;
-    }
-    final result = await showOpeningDialog(context, today, missing, prefill);
+    // Today's SMS balance is a point-in-time observation, never an opening.
+    // Keep unknown openings blank and require the owner's confirmation.
+    final prefill = <int, double?>{
+      for (final a in missing)
+        a.id!: _preDayBalances[a.id] == null
+            ? null
+            : _preDayBalances[a.id]!.minor / 100,
+    };
+    final result = await showOpeningDialog(context, today, missing, prefill,
+        latestSms: _smsBalances, openingSms: _preDayBalances);
     if (result == null) return;
     for (final e in result.entries) {
       await TxDb.setOpening(e.key, today, e.value);
@@ -280,6 +306,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 MaterialPageRoute(
                     builder: (_) => SettingsScreen(onRestored: () async {
                           await _reload();
+                          await _scan();
                           if (mounted) setState(() => _dashRefresh++);
                         }))),
           ),
@@ -382,7 +409,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     await _reload();
                   },
                 ),
-                DashboardTab(refresh: _dashRefresh),
+                DashboardTab(
+                    refresh: _dashRefresh,
+                    smsBalances: _smsBalances.values.toList()),
               ],
             ),
       floatingActionButton: (_tab == 0 || _tab == 5)
