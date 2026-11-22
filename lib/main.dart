@@ -17,6 +17,7 @@ import 'settings_screen.dart';
 import 'tx_detail_screen.dart';
 import 'suggestions_screen.dart';
 import 'wallet_sms_balance.dart';
+import 'opening_dialog.dart';
 import 'parser.dart' show smsKey, detectWallet;
 
 void main() => runApp(const WalletLogApp());
@@ -215,7 +216,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ? null
             : _preDayBalances[a.id]!.minor / 100,
     };
-    final result = await showOpeningDialog(context, today, missing, prefill,
+    final result = await showSmsOpeningDialog(context, today, missing, prefill,
         latestSms: _smsBalances, openingSms: _preDayBalances);
     if (result == null) return;
     for (final e in result.entries) {
