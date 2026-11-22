@@ -798,6 +798,39 @@ class TxDb {
     }
   }
 
+  /// Fail closed: unlike legacy API-key handling, a sync credential is never
+  /// written back to SQLite if platform secure storage is unavailable.
+  static Future<String> syncToken() async {
+    const key = 'wallet_sync_token';
+    const store = FlutterSecureStorage();
+    final secure = await store.read(key: key);
+    if (secure != null && secure.isNotEmpty) {
+      await deleteSetting(key);
+      return secure;
+    }
+    final legacy = await setting(key);
+    if (legacy == null || legacy.isEmpty) return '';
+    await setSyncToken(legacy);
+    return legacy;
+  }
+
+  static Future<void> setSyncToken(String value) async {
+    const key = 'wallet_sync_token';
+    const store = FlutterSecureStorage();
+    if (value.isEmpty) {
+      await store.delete(key: key);
+      if (await store.read(key: key) != null) {
+        throw StateError('تعذر حذف رمز المزامنة من التخزين الآمن.');
+      }
+    } else {
+      await store.write(key: key, value: value);
+      if (await store.read(key: key) != value) {
+        throw StateError('تعذر حفظ رمز المزامنة بأمان. لم تتم المزامنة.');
+      }
+    }
+    await deleteSetting(key);
+  }
+
   static Future<String?> setting(String key) async {
     final db = await _database;
     final rows = await db.query('settings',
