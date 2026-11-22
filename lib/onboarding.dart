@@ -4,6 +4,7 @@ import 'db.dart';
 import 'gemini.dart';
 import 'sim_setup.dart';
 import 'tabs.dart';
+import 'privacy_disclosures.dart';
 
 const _green = Color(0xFF0F766E);
 
@@ -69,7 +70,11 @@ class _OnboardingPageState extends State<OnboardingPage> {
   @override
   void initState() {
     super.initState();
-    _loadSims();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final discover = await showSimDisclosure(context);
+      if (mounted) await _loadSims(discover: discover);
+    });
   }
 
   @override
@@ -82,11 +87,11 @@ class _OnboardingPageState extends State<OnboardingPage> {
     super.dispose();
   }
 
-  Future<void> _loadSims() async {
+  Future<void> _loadSims({bool discover = true}) async {
     var sims = <SimSlot>[];
     try {
-      final granted =
-          await smsChannel.invokeMethod<bool>('requestPhoneState') ?? false;
+      final granted = discover &&
+          (await smsChannel.invokeMethod<bool>('requestPhoneState') ?? false);
       if (granted) {
         final raw =
             await smsChannel.invokeMethod<List<dynamic>>('simInfo') ?? const [];
