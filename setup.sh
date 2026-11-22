@@ -37,6 +37,10 @@ cp native/*.kt "$KT_DIR/"
 
 MANIFEST=android/app/src/main/AndroidManifest.xml
 
+# OS cloud/device backups must not copy keystore-backed credentials or wallet
+# data. The owner's explicit in-app ZIP backup remains available and redacted.
+sed -i 's|<application|<application android:allowBackup="false" android:fullBackupContent="@xml/wallet_backup_rules" android:dataExtractionRules="@xml/wallet_data_extraction_rules" android:usesCleartextTraffic="false"|' "$MANIFEST"
+
 # App name (أموالي) and launcher icon.
 sed -i 's|android:label="[^"]*"|android:label="أموالي"|' "$MANIFEST"
 cp -r native/res/. android/app/src/main/res/
