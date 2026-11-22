@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'backup_service.dart';
 import 'db.dart';
+import 'onboarding.dart';
 import 'ledger_service.dart';
 import 'review_strings.dart';
 import 'wallet_sync_service.dart';
@@ -54,7 +55,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _message = null;
     });
     try {
-      await TxDb.setSetting(WalletSyncService.endpointKey, _endpoint.text.trim());
+      await TxDb.setSetting(
+          WalletSyncService.endpointKey, _endpoint.text.trim());
       await TxDb.setSetting(WalletSyncService.tokenKey, _token.text.trim());
       final result = await WalletSyncService.sync(
         endpoint: _endpoint.text,
@@ -170,6 +172,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(t(context, 'الإعدادات', 'Settings'))),
       body: ListView(padding: const EdgeInsets.all(16), children: [
+        ListTile(
+          leading: const Icon(Icons.sim_card_outlined),
+          title: Text(t(context, 'اكتشاف وإضافة الشرائح والمحافظ',
+              'Detect SIMs and add wallets')),
+          subtitle: Text(t(context, 'بدون حذف الحسابات أو تغيير إعداد الذكاء',
+              'Keeps existing accounts and AI settings')),
+          onTap: _busy
+              ? null
+              : () async {
+                  await Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                          builder: (ctx) => OnboardingPage(
+                              simOnly: true,
+                              onDone: () async {
+                                Navigator.pop(ctx);
+                              })));
+                  await widget.onRestored();
+                },
+        ),
         Text(t(context, 'النسخ الاحتياطي', 'Backup & restore'),
             style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
@@ -199,7 +221,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Text(t(context, 'مزامنة لوحة التحكم', 'Dashboard sync'),
             style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        Text(t(context, 'أدخل رابط لوحة supermarket ورمز WALLET_SYNC_TOKEN ثم اضغط مزامنة.',
+        Text(t(
+            context,
+            'أدخل رابط لوحة supermarket ورمز WALLET_SYNC_TOKEN ثم اضغط مزامنة.',
             'Enter the supermarket URL and WALLET_SYNC_TOKEN, then sync.')),
         const SizedBox(height: 8),
         TextField(
