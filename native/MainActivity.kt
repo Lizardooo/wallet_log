@@ -82,6 +82,10 @@ class MainActivity : FlutterActivity() {
             result.success(true)
             return
         }
+        if (pending != null) {
+            result.error("busy", "Another permission request is in progress", null)
+            return
+        }
         pending = result
         pendingSim = sim
         requestPermissions(missing.toTypedArray(), 77)
@@ -117,18 +121,29 @@ class MainActivity : FlutterActivity() {
     private fun simInfo(): List<Map<String, Any?>> {
         if (!hasPerm(Manifest.permission.READ_PHONE_STATE)) return emptyList()
         if (Build.VERSION.SDK_INT < 22) return emptyList()
+        val manager = SubscriptionManager.from(applicationContext)
         val subs = try {
-            SubscriptionManager.from(applicationContext).activeSubscriptionInfoList
-        } catch (e: Exception) {
-            null
+            // Include active subscriptions hidden from the regular list on
+            // multi-SIM/eSIM devices. Never infer a second SIM from slot count.
+            if (Build.VERSION.SDK_INT >= 30) manager.completeActiveSubscriptionInfoList
+            else manager.activeSubscriptionInfoList
+        } catch (_: Exception) {
+            try { manager.activeSubscriptionInfoList }
+            catch (_: Exception) { null }
         } ?: return emptyList()
-        return subs.mapIndexed { index, s ->
-            val number = try {
-                val n = s.number
-                if (n.isNullOrBlank()) null else n
-            } catch (e: Exception) {
-                null
-            }
+        return subs.distinctBy { it.subscriptionId }
+            .sortedBy { it.simSlotIndex }
+            .mapIndexed { index, s ->
+            // Android 13+ uses SubscriptionManager.getPhoneNumber. Carriers
+            // may leave this empty even with permission: manual entry is normal.
+            val modern = if (Build.VERSION.SDK_INT >= 33) {
+                try { manager.getPhoneNumber(s.subscriptionId).takeIf { it.isNotBlank() } }
+                catch (_: Exception) { null }
+            } else null
+            @Suppress("DEPRECATION")
+            val number = modern ?: try {
+                s.number?.takeIf { it.isNotBlank() }
+            } catch (_: Exception) { null }
             mapOf(
                 "subId" to s.subscriptionId,
                 "slot" to if (s.simSlotIndex >= 0) s.simSlotIndex else index,
