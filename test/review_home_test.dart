@@ -41,6 +41,7 @@ void main() {
         await TxDb.close();
         await databaseFactory.setDatabasesPath(dir!.path);
         await TxDb.setSetting(TxDb.settingsSetupDone, '1');
+        await TxDb.setSetting('sms_access_disclosure_v1', 'accepted');
       });
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(smsChannel,
           (call) async {
