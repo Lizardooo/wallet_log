@@ -7,6 +7,8 @@ import 'review_strings.dart';
 import 'summary_service.dart';
 import 'suggestions_screen.dart';
 import 'tx_detail_screen.dart';
+import 'wallet_sms_balance.dart';
+import 'sms_balance_label.dart';
 
 String statusLabel(BuildContext c, String status, {bool reversed = false}) {
   if (reversed) return reviewText(c, 'معكوسة', 'Reversed');
@@ -38,7 +40,9 @@ Color statusColor(String status, {bool reversed = false}) {
 /// confirmed number.
 class DashboardTab extends StatefulWidget {
   final int refresh; // bump to reload
-  const DashboardTab({super.key, this.refresh = 0});
+  final List<SmsWalletBalance> smsBalances;
+  const DashboardTab(
+      {super.key, this.refresh = 0, this.smsBalances = const []});
 
   @override
   State<DashboardTab> createState() => _DashboardTabState();
@@ -241,6 +245,19 @@ class _DashboardTabState extends State<DashboardTab> {
                           '${t(context, 'الرصيد المؤكد', 'Confirmed balance')}: '
                           '${w.totals.confirmedBalanceMinor == null ? '—' : formatMinor(w.totals.confirmedBalanceMinor!)}',
                           style: Theme.of(context).textTheme.titleMedium),
+                      if (widget.smsBalances
+                              .where((b) =>
+                                  b.provider == w.provider &&
+                                  b.number == w.phone)
+                              .length ==
+                          1)
+                        SmsBalanceLabel(
+                            balance: widget.smsBalances.singleWhere((b) =>
+                                b.provider == w.provider &&
+                                b.number == w.phone))
+                      else
+                        Text(t(context, 'آخر رصيد برسالة: غير متاح',
+                            'Last SMS balance: unavailable')),
                     ]),
               ),
             ),
