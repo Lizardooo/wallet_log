@@ -80,6 +80,8 @@ void main() {
       'all reported SIMs remain reachable and missing numbers are manual',
       (tester) async {
     await tester.pumpWidget(app());
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('السماح بالاكتشاف'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(TextField, '01011111111'), findsOneWidget);
     expect(find.text('شريحة 1'), findsOneWidget);
@@ -97,6 +99,8 @@ void main() {
       (tester) async {
     granted = false;
     await tester.pumpWidget(app());
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('السماح بالاكتشاف'));
     await tester.pumpAndSettle();
     expect(find.text('رقم إضافي'), findsOneWidget);
     expect(find.text('شريحة 2'), findsOneWidget); // slot choice only
@@ -113,6 +117,8 @@ void main() {
       {'subId': 22, 'slot': 1, 'carrier': 'Orange', 'number': ''}
     ];
     await tester.pumpWidget(app());
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('السماح بالاكتشاف'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('الرقم عليه محفظة / محفظة إلكترونية'));
     await tester.pumpAndSettle();
@@ -127,6 +133,8 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(320, 740));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(app());
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('السماح بالاكتشاف'));
     await tester.pumpAndSettle();
     if (Platform.environment['CAPTURE_UI'] == '1') {
       await expectLater(find.byType(OnboardingPage),
@@ -155,6 +163,8 @@ void main() {
       {'subId': 11, 'slot': 0, 'carrier': 'Vodafone', 'number': '+201011111111'}
     ];
     await tester.pumpWidget(app());
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('السماح بالاكتشاف'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('الرقم عليه محفظة / محفظة إلكترونية'));
     await tester.pumpAndSettle();
