@@ -17,7 +17,11 @@ import 'ledger_service.dart';
 import 'schema.dart';
 
 const backupFormat = 1;
-const _secretSettings = ['gemini_api_key'];
+const _secretSettings = [
+  'gemini_api_key',
+  'wallet_sync_token',
+  'sms_access_disclosure_v1', // consent is asked again after a restore
+];
 
 class BackupService {
   final Database db;
