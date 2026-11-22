@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'db.dart';
 import 'gemini.dart';
-import 'parser.dart';
+import 'sim_setup.dart';
 import 'tabs.dart';
 
 const _green = Color(0xFF0F766E);
@@ -14,6 +14,7 @@ class _SimDraft {
   int? subId;
   int? slot;
   String carrier;
+  String? defaultWallet;
 
   _SimDraft({
     this.subId,
@@ -39,8 +40,9 @@ String _shortWallet(String w) => switch (w) {
 /// can be classified by a model. Finishing goes straight to the reports.
 class OnboardingPage extends StatefulWidget {
   final Future<void> Function() onDone;
+  final bool simOnly;
 
-  const OnboardingPage({super.key, required this.onDone});
+  const OnboardingPage({super.key, required this.onDone, this.simOnly = false});
 
   @override
   State<OnboardingPage> createState() => _OnboardingPageState();
@@ -56,6 +58,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
 
   List<SimSlot> _sims = const [];
   bool _simsLoaded = false;
+  List<Account> _existing = const [];
 
   bool _loadingModels = false;
   List<GeminiModel> _models = const [];
@@ -95,15 +98,19 @@ class _OnboardingPageState extends State<OnboardingPage> {
             subId: (rawSub != null && rawSub >= 0) ? rawSub : null,
             slot: (rawSlot == null || rawSlot < 0) ? i : rawSlot,
             carrier: (m['carrier'] as String?) ?? '',
-            number: normalizeDigits(((m['number'] as String?) ?? '').trim()),
+            number: normalizeSimNumber((m['number'] as String?) ?? ''),
           ));
         }
       }
     } catch (_) {
       // The wizard still works: the owner can enter the numbers by hand.
     }
+    final existing = widget.simOnly ? await TxDb.accounts() : <Account>[];
+    final settings =
+        widget.simOnly ? await TxDb.allSettings() : <String, String>{};
     if (!mounted) return;
     setState(() {
+      _existing = existing;
       _sims = sims;
       _simsLoaded = true;
       for (final d in _simDrafts) {
@@ -111,8 +118,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
       }
       _simDrafts.clear();
       if (sims.isEmpty) {
-        _simDrafts.add(_SimDraft(slot: 0));
-        _simDrafts.add(_SimDraft(slot: 1));
+        _simDrafts.add(_SimDraft());
       } else {
         for (final s in sims) {
           _simDrafts.add(_SimDraft(
@@ -121,6 +127,20 @@ class _OnboardingPageState extends State<OnboardingPage> {
             carrier: s.carrier,
             numberText: s.number,
           ));
+        }
+      }
+      for (final d in _simDrafts) {
+        final matches = existing.where((a) => d.subId != null
+            ? a.subId == d.subId
+            : d.number.text.isNotEmpty && a.number == d.number.text);
+        if (matches.isNotEmpty) {
+          if (d.number.text.isEmpty) d.number.text = matches.first.number;
+          d.active = true;
+          d.wallets.addAll(matches.map((a) => a.wallet));
+          d.defaultWallet = settings[defaultWalletKey(d.subId, d.number.text)];
+          if (!d.wallets.contains(d.defaultWallet)) {
+            d.defaultWallet = d.wallets.length == 1 ? d.wallets.single : null;
+          }
         }
       }
     });
@@ -170,10 +190,15 @@ class _OnboardingPageState extends State<OnboardingPage> {
       if (!skipped) {
         for (final d in _simDrafts) {
           if (!d.selected) continue;
-          final number = normalizeDigits(d.number.text.trim());
+          final number = normalizeSimNumber(d.number.text);
           if (number.isEmpty && d.subId == null) continue;
           for (final wallet in d.wallets) {
+            final matches = _existing.where((a) =>
+                a.wallet == wallet &&
+                ((d.subId != null && a.subId == d.subId) ||
+                    a.number == number));
             await TxDb.saveAccount(Account(
+              id: matches.length == 1 ? matches.single.id : null,
               name: _autoName(wallet, d, number),
               wallet: wallet,
               number: number,
@@ -181,6 +206,9 @@ class _OnboardingPageState extends State<OnboardingPage> {
               slot: d.slot,
             ));
           }
+          // This is a user-selected preference, never an SMS routing rule.
+          await TxDb.setSetting(defaultWalletKey(d.subId, number),
+              d.defaultWallet ?? d.wallets.single);
         }
         final key = _key.text.trim();
         if (key.isNotEmpty) {
@@ -214,14 +242,24 @@ class _OnboardingPageState extends State<OnboardingPage> {
         ));
         return;
       }
-      final missing = chosen.any((d) =>
-          normalizeDigits(d.number.text.trim()).isEmpty && d.subId == null);
+      final missing =
+          chosen.any((d) => normalizeSimNumber(d.number.text).isEmpty);
       if (missing) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('اكتب رقم المحفظة للرقم اللي اخترته.'),
         ));
         return;
       }
+      if (chosen.any((d) => d.defaultWallet == null)) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('حدد المحفظة الافتراضية لكل رقم اخترته.'),
+        ));
+        return;
+      }
+    }
+    if (widget.simOnly) {
+      _finish();
+      return;
     }
     setState(() => _step++);
     _pages.animateToPage(_step,
@@ -243,7 +281,9 @@ class _OnboardingPageState extends State<OnboardingPage> {
     };
     return Scaffold(
       appBar: AppBar(
-        title: Text('إعداد أموالي · $title'),
+        toolbarHeight: 72,
+        title: Text('إعداد أموالي · $title',
+            maxLines: 2, style: const TextStyle(fontSize: 18)),
         automaticallyImplyLeading: false,
         actions: [
           TextButton(
@@ -312,6 +352,10 @@ class _OnboardingPageState extends State<OnboardingPage> {
           'اكتبه يدوياً.',
           style: TextStyle(fontSize: 13),
         ),
+        if (widget.simOnly)
+          const Text(
+              'الحسابات الموجودة لا تُحذف من هنا. التعديل أو الحذف من تبويب الحسابات.',
+              style: TextStyle(fontSize: 12)),
         const SizedBox(height: 8),
         if (!_simsLoaded)
           const Padding(
@@ -389,13 +433,19 @@ class _OnboardingPageState extends State<OnboardingPage> {
               decoration: InputDecoration(
                 labelText: 'رقم الشريحة / المحفظة',
                 hintText: '01xxxxxxxxx',
-                helperText: d.subId == null
-                    ? 'اكتب الرقم يدوياً'
-                    : 'اتركه فارغاً لو الرقم مش معروف',
+                helperText: 'راجع الرقم وعدله عند الحاجة، أو اكتبه لو مش ظاهر',
+                helperMaxLines: 2,
                 border: const OutlineInputBorder(),
                 isDense: true,
               ),
             ),
+            if (d.subId != null && d.number.text.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text(
+                    'تم اكتشاف الشريحة، لكن الشبكة لم توفّر رقمها. أدخله يدوياً.',
+                    style: TextStyle(fontSize: 12)),
+              ),
             if (d.subId == null) ...[
               const SizedBox(height: 6),
               const Text('الشريحة (SIM slot)', style: TextStyle(fontSize: 12)),
@@ -463,13 +513,35 @@ class _OnboardingPageState extends State<OnboardingPage> {
                       onSelected: (on) => setState(() {
                         if (on) {
                           d.wallets.add(w);
+                          if (d.wallets.length == 1) d.defaultWallet = w;
                         } else {
                           d.wallets.remove(w);
+                          if (d.defaultWallet == w) d.defaultWallet = null;
                         }
                       }),
                     ),
                 ],
               ),
+            if (d.active && d.wallets.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                key: ValueKey('${d.hashCode}|${d.defaultWallet}'),
+                initialValue: d.defaultWallet,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'المحفظة الافتراضية لهذا الرقم',
+                  border: OutlineInputBorder(),
+                  helperText:
+                      'اختيارك فقط، لا يغيّر تصنيف رسائل المحافظ الأخرى',
+                  helperMaxLines: 2,
+                ),
+                items: [
+                  for (final w in d.wallets)
+                    DropdownMenuItem(value: w, child: Text(_shortWallet(w)))
+                ],
+                onChanged: (w) => setState(() => d.defaultWallet = w),
+              ),
+            ],
           ],
         ),
       ),
