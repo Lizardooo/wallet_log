@@ -563,6 +563,8 @@ void main() {
       await ev.attachSms(m, sender: 'VF', body: 'orig sms', ts: 1);
       await conf.confirmByProvider(m, reason: 'checked');
       await TxDb.setSetting(TxDb.settingsApiKey, 'SECRET-KEY');
+      await TxDb.setSetting('wallet_sync_token', 'LEGACY-SYNC-SECRET');
+      await TxDb.setSetting('sms_access_disclosure_v1', 'accepted');
       await TxDb.setSetting('gemini_model', 'gemini-flash');
       final zip = File(p.join(dir.path, 'backup.zip'));
       final manifest = await BackupService(ws.db, files).create(zip);
@@ -591,7 +593,10 @@ void main() {
               .length,
           greaterThan(2));
       expect(
-          await d.query('settings', where: "key = 'gemini_api_key'"), isEmpty);
+          await d.query('settings',
+              where:
+                  "key IN ('gemini_api_key', 'wallet_sync_token', 'sms_access_disclosure_v1')"),
+          isEmpty);
       expect(
           (await d.query('settings', where: "key = 'gemini_model'"))
               .single['value'],
